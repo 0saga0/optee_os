@@ -16,7 +16,7 @@
  * Bitfield to reflect status and secure-status values ("okay", "disabled"
  * or not present)
  */
-#define DT_STATUS_DISABLED		0
+#define DT_STATUS_DISABLED		U(0)
 #define DT_STATUS_OK_NSEC		BIT(0)
 #define DT_STATUS_OK_SEC		BIT(1)
 
@@ -31,12 +31,15 @@
  * @reg: Device register physical base address or DT_INFO_INVALID_REG
  * @clock: Device identifier (positive value) or DT_INFO_INVALID_CLOCK
  * @reset: Device reset identifier (positive value) or DT_INFO_INVALID_CLOCK
+ * @interrupt: Device interrupt identifier (positive value) or
+ * DT_INFO_INVALID_INTERRUPT
  */
 struct dt_node_info {
 	unsigned int status;
 	paddr_t reg;
 	int clock;
 	int reset;
+	int interrupt;
 };
 
 #if defined(CFG_DT)
@@ -95,18 +98,6 @@ int dt_map_dev(const void *fdt, int offs, vaddr_t *base, size_t *size);
  * Returns true on success or false if no propname.
  */
 bool dt_have_prop(const void *fdt, int offs, const char *propname);
-
-/*
- * Get the DT interrupt property of the @node. In the DT an interrupt
- * is defined with at least 2x32 bits detailling the interrupt number and type.
- *
- * @fdt reference to the Device Tree
- * @node is the node offset to read
- *
- * Returns the interrupt number if value >= 0
- * otherwise DT_INFO_INVALID_INTERRUPT
- */
-int dt_get_irq(void *fdt, int node);
 
 /*
  * Modify or add "status" property to "disabled"

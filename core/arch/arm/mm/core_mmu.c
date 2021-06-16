@@ -304,7 +304,7 @@ static void carve_out_phys_mem(struct core_mmu_phys_mem **mem, size_t *nelems,
 		/* Remove this entry */
 		(*nelems)--;
 		memmove(m + n, m + n + 1, sizeof(*m) * (*nelems - n));
-		m = realloc(m, sizeof(*m) * *nelems);
+		m = nex_realloc(m, sizeof(*m) * *nelems);
 		if (!m)
 			panic();
 		*mem = m;
@@ -315,7 +315,7 @@ static void carve_out_phys_mem(struct core_mmu_phys_mem **mem, size_t *nelems,
 		m[n].size -= size;
 	} else {
 		/* Need to split the memory entry */
-		m = realloc(m, sizeof(*m) * (*nelems + 1));
+		m = nex_realloc(m, sizeof(*m) * (*nelems + 1));
 		if (!m)
 			panic();
 		*mem = m;
@@ -1622,7 +1622,7 @@ void core_mmu_map_region(struct mmu_partition *prtn, struct tee_mmap_region *mm)
 	vaddr_t vaddr = mm->va;
 	paddr_t paddr = mm->pa;
 	ssize_t size_left = mm->size;
-	int level;
+	unsigned int level;
 	bool table_found;
 	uint32_t old_attr;
 
@@ -1927,7 +1927,7 @@ TEE_Result core_mmu_remove_mapping(enum teecore_memtypes type, void *addr,
 	return TEE_SUCCESS;
 }
 
-bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
+void *core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 {
 	struct core_mmu_table_info tbl_info;
 	struct tee_mmap_region *map;
@@ -1937,23 +1937,23 @@ bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 	size_t l;
 
 	if (!len)
-		return true;
+		return NULL;
 
 	if (!core_mmu_check_end_pa(addr, len))
-		return false;
+		return NULL;
 
 	/* Check if the memory is already mapped */
 	map = find_map_by_type_and_pa(type, addr);
 	if (map && pbuf_inside_map_area(addr, len, map))
-		return true;
+		return (void *)(vaddr_t)(map->va + addr - map->pa);
 
 	/* Find the reserved va space used for late mappings */
 	map = find_map_by_type(MEM_AREA_RES_VASPACE);
 	if (!map)
-		return false;
+		return NULL;
 
 	if (!core_mmu_find_table(NULL, map->va, UINT_MAX, &tbl_info))
-		return false;
+		return NULL;
 
 	granule = 1 << tbl_info.shift;
 	p = ROUNDDOWN(addr, granule);
@@ -1961,7 +1961,7 @@ bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 
 	/* Ban overflowing virtual addresses */
 	if (map->size < l)
-		return false;
+		return NULL;
 
 	/*
 	 * Something is wrong, we can't fit the va range into the selected
@@ -1969,7 +1969,7 @@ bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 	 * granule.
 	 */
 	if (core_mmu_va2idx(&tbl_info, map->va + len) >= tbl_info.num_entries)
-		return false;
+		return NULL;
 
 	/* Find end of the memory map */
 	n = 0;
@@ -2001,7 +2001,7 @@ bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len)
 	/* Make sure the new entry is visible before continuing. */
 	dsb_ishst();
 
-	return true;
+	return (void *)(vaddr_t)(map->va + addr - map->pa);
 }
 
 unsigned int asid_alloc(void)
@@ -2042,8 +2042,8 @@ void asid_free(unsigned int asid)
 static bool arm_va2pa_helper(void *va, paddr_t *pa)
 {
 	uint32_t exceptions = thread_mask_exceptions(THREAD_EXCP_ALL);
-	paddr_t par;
-	paddr_t par_pa_mask;
+	paddr_t par = 0;
+	paddr_t par_pa_mask = 0;
 	bool ret = false;
 
 #ifdef ARM32
@@ -2086,14 +2086,14 @@ static vaddr_t get_linear_map_end(void)
 #if defined(CFG_TEE_CORE_DEBUG)
 static void check_pa_matches_va(void *va, paddr_t pa)
 {
-	TEE_Result res;
+	TEE_Result res = TEE_ERROR_GENERIC;
 	vaddr_t v = (vaddr_t)va;
 	paddr_t p = 0;
 	struct core_mmu_table_info ti __maybe_unused = { };
 
 	if (core_mmu_user_va_range_is_defined()) {
-		vaddr_t user_va_base;
-		size_t user_va_size;
+		vaddr_t user_va_base = 0;
+		size_t user_va_size = 0;
 
 		core_mmu_get_user_va_range(&user_va_base, &user_va_size);
 		if (v >= user_va_base &&
@@ -2106,6 +2106,8 @@ static void check_pa_matches_va(void *va, paddr_t pa)
 
 			res = vm_va2pa(to_user_mode_ctx(thread_get_tsd()->ctx),
 				       va, &p);
+			if (res == TEE_ERROR_NOT_SUPPORTED)
+				return;
 			if (res == TEE_SUCCESS && pa != p)
 				panic("bad pa");
 			if (res != TEE_SUCCESS && pa)
@@ -2167,7 +2169,7 @@ static void check_pa_matches_va(void *va __unused, paddr_t pa __unused)
 
 paddr_t virt_to_phys(void *va)
 {
-	paddr_t pa;
+	paddr_t pa = 0;
 
 	if (!arm_va2pa_helper(va, &pa))
 		pa = 0;
@@ -2178,7 +2180,7 @@ paddr_t virt_to_phys(void *va)
 #if defined(CFG_TEE_CORE_DEBUG)
 static void check_va_matches_pa(paddr_t pa, void *va)
 {
-	paddr_t p;
+	paddr_t p = 0;
 
 	if (!va)
 		return;
@@ -2197,16 +2199,10 @@ static void check_va_matches_pa(paddr_t pa __unused, void *va __unused)
 
 static void *phys_to_virt_ta_vaspace(paddr_t pa)
 {
-	TEE_Result res;
-	void *va = NULL;
-
 	if (!core_mmu_user_mapping_is_active())
 		return NULL;
 
-	res = vm_pa2va(to_user_mode_ctx(thread_get_tsd()->ctx), pa, &va);
-	if (res != TEE_SUCCESS)
-		return NULL;
-	return va;
+	return vm_pa2va(to_user_mode_ctx(thread_get_tsd()->ctx), pa);
 }
 
 #ifdef CFG_WITH_PAGER
@@ -2219,7 +2215,7 @@ static void *phys_to_virt_tee_ram(paddr_t pa)
 #else
 static void *phys_to_virt_tee_ram(paddr_t pa)
 {
-	struct tee_mmap_region *mmap;
+	struct tee_mmap_region *mmap = NULL;
 
 	mmap = find_map_by_type_and_pa(MEM_AREA_TEE_RAM, pa);
 	if (!mmap)
@@ -2237,7 +2233,7 @@ static void *phys_to_virt_tee_ram(paddr_t pa)
 
 void *phys_to_virt(paddr_t pa, enum teecore_memtypes m)
 {
-	void *va;
+	void *va = NULL;
 
 	switch (m) {
 	case MEM_AREA_TA_VASPACE:
@@ -2264,8 +2260,8 @@ void *phys_to_virt(paddr_t pa, enum teecore_memtypes m)
 
 void *phys_to_virt_io(paddr_t pa)
 {
-	struct tee_mmap_region *map;
-	void *va;
+	struct tee_mmap_region *map = NULL;
+	void *va = NULL;
 
 	map = find_map_by_type_and_pa(MEM_AREA_IO_SEC, pa);
 	if (!map)

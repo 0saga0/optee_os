@@ -22,9 +22,6 @@
 #include "serializer.h"
 #include "token_capabilities.h"
 
-/* Byte size of CKA_ID attribute when generated locally */
-#define PKCS11_CKA_DEFAULT_SIZE		16
-
 static uint32_t pkcs11_func2ckfm(enum processing_func function)
 {
 	switch (function) {
@@ -252,11 +249,6 @@ static enum pkcs11_rc get_default_value(enum pkcs11_attr_id id, void **value,
 	/* should have been taken care of already */
 	assert(!pkcs11_attr_is_boolean(id));
 
-	if (id == PKCS11_CKA_PUBLIC_KEY_INFO) {
-		EMSG("Cannot provide default PUBLIC_KEY_INFO");
-		return PKCS11_CKR_TEMPLATE_INCONSISTENT;
-	}
-
 	/* All other attributes have an empty default value */
 	*value = NULL;
 	*size = 0;
@@ -378,11 +370,11 @@ static const uint32_t public_key_boolprops[] = {
 };
 
 static const uint32_t public_key_mandated[] = {
-	PKCS11_CKA_SUBJECT
 };
 
 static const uint32_t public_key_opt_or_null[] = {
-	PKCS11_CKA_WRAP_TEMPLATE, PKCS11_CKA_PUBLIC_KEY_INFO,
+	PKCS11_CKA_SUBJECT, PKCS11_CKA_WRAP_TEMPLATE,
+	PKCS11_CKA_PUBLIC_KEY_INFO,
 };
 
 /* PKCS#11 specification for any asymmetric private key (+any_key_xxx) */
@@ -394,11 +386,11 @@ static const uint32_t private_key_boolprops[] = {
 };
 
 static const uint32_t private_key_mandated[] = {
-	PKCS11_CKA_SUBJECT
 };
 
 static const uint32_t private_key_opt_or_null[] = {
-	PKCS11_CKA_UNWRAP_TEMPLATE, PKCS11_CKA_PUBLIC_KEY_INFO,
+	PKCS11_CKA_SUBJECT, PKCS11_CKA_UNWRAP_TEMPLATE,
+	PKCS11_CKA_PUBLIC_KEY_INFO,
 };
 
 /* PKCS#11 specification for any RSA key (+public/private_key_xxx) */
@@ -427,10 +419,10 @@ static const uint32_t ec_public_key_opt_or_null[] = {
 };
 
 static const uint32_t ec_private_key_mandated[] = {
-	PKCS11_CKA_EC_PARAMS,
 };
 
 static const uint32_t ec_private_key_opt_or_null[] = {
+	PKCS11_CKA_EC_PARAMS,
 	PKCS11_CKA_VALUE,
 };
 
@@ -753,7 +745,7 @@ create_attributes_from_template(struct obj_attrs **out, void *template,
 				struct obj_attrs *parent,
 				enum processing_func function,
 				enum pkcs11_mechanism_id mecha,
-				enum pkcs11_class_id template_class __unused)
+				enum pkcs11_class_id template_class)
 {
 	struct obj_attrs *temp = NULL;
 	struct obj_attrs *attrs = NULL;
@@ -769,6 +761,7 @@ create_attributes_from_template(struct obj_attrs **out, void *template,
 	trace_attributes_from_api_head("template", template, template_size);
 	switch (function) {
 	case PKCS11_FUNCTION_GENERATE:
+	case PKCS11_FUNCTION_GENERATE_PAIR:
 	case PKCS11_FUNCTION_IMPORT:
 	case PKCS11_FUNCTION_MODIFY:
 	case PKCS11_FUNCTION_DERIVE:
@@ -794,6 +787,23 @@ create_attributes_from_template(struct obj_attrs **out, void *template,
 		case PKCS11_CKM_AES_KEY_GEN:
 			class = PKCS11_CKO_SECRET_KEY;
 			type = PKCS11_CKK_AES;
+			break;
+		default:
+			TEE_Panic(TEE_ERROR_NOT_SUPPORTED);
+		}
+	}
+
+	/*
+	 * For PKCS11_FUNCTION_GENERATE_PAIR, find the class and type
+	 * based on the mechanism. These will be passed as hint
+	 * sanitize_client_object() and added in temp if not
+	 * already present
+	 */
+	if (function == PKCS11_FUNCTION_GENERATE_PAIR) {
+		switch (mecha) {
+		case PKCS11_CKM_EC_KEY_PAIR_GEN:
+			class = template_class;
+			type = PKCS11_CKK_EC;
 			break;
 		default:
 			TEE_Panic(TEE_ERROR_NOT_SUPPORTED);
@@ -837,6 +847,14 @@ create_attributes_from_template(struct obj_attrs **out, void *template,
 	case PKCS11_CKM_AES_KEY_GEN:
 		if (get_class(temp) != PKCS11_CKO_SECRET_KEY ||
 		    get_key_type(temp) != PKCS11_CKK_AES) {
+			rc = PKCS11_CKR_TEMPLATE_INCONSISTENT;
+			goto out;
+		}
+		break;
+	case PKCS11_CKM_EC_KEY_PAIR_GEN:
+		if ((get_class(temp) != PKCS11_CKO_PUBLIC_KEY &&
+		     get_class(temp) != PKCS11_CKO_PRIVATE_KEY) ||
+		    get_key_type(temp) != PKCS11_CKK_EC) {
 			rc = PKCS11_CKR_TEMPLATE_INCONSISTENT;
 			goto out;
 		}
@@ -891,6 +909,7 @@ create_attributes_from_template(struct obj_attrs **out, void *template,
 
 	switch (function) {
 	case PKCS11_FUNCTION_GENERATE:
+	case PKCS11_FUNCTION_GENERATE_PAIR:
 		local = PKCS11_TRUE;
 		break;
 	case PKCS11_FUNCTION_IMPORT:
@@ -920,6 +939,7 @@ create_attributes_from_template(struct obj_attrs **out, void *template,
 			       !get_bool(attrs, PKCS11_CKA_EXTRACTABLE);
 			break;
 		case PKCS11_FUNCTION_GENERATE:
+		case PKCS11_FUNCTION_GENERATE_PAIR:
 			always_sensitive = get_bool(attrs,
 						    PKCS11_CKA_SENSITIVE);
 			never_extract = !get_bool(attrs,
@@ -1121,6 +1141,7 @@ enum pkcs11_rc check_created_attrs_against_processing(uint32_t proc_id,
 		break;
 	case PKCS11_CKM_GENERIC_SECRET_KEY_GEN:
 	case PKCS11_CKM_AES_KEY_GEN:
+	case PKCS11_CKM_EC_KEY_PAIR_GEN:
 		assert(check_attr_bval(proc_id, head, PKCS11_CKA_LOCAL, true));
 		break;
 	default:
@@ -1134,6 +1155,9 @@ enum pkcs11_rc check_created_attrs_against_processing(uint32_t proc_id,
 		break;
 	case PKCS11_CKM_AES_KEY_GEN:
 		assert(get_key_type(head) == PKCS11_CKK_AES);
+		break;
+	case PKCS11_CKM_EC_KEY_PAIR_GEN:
+		assert(get_key_type(head) == PKCS11_CKK_EC);
 		break;
 	case PKCS11_PROCESSING_IMPORT:
 	default:
@@ -1189,6 +1213,8 @@ enum pkcs11_rc check_created_attrs(struct obj_attrs *key1,
 {
 	enum pkcs11_rc rc = PKCS11_CKR_OK;
 	struct obj_attrs *secret = NULL;
+	struct obj_attrs *private = NULL;
+	struct obj_attrs *public = NULL;
 	uint32_t max_key_size = 0;
 	uint32_t min_key_size = 0;
 	uint32_t key_length = 0;
@@ -1197,12 +1223,37 @@ enum pkcs11_rc check_created_attrs(struct obj_attrs *key1,
 	case PKCS11_CKO_SECRET_KEY:
 		secret = key1;
 		break;
+	case PKCS11_CKO_PUBLIC_KEY:
+		public = key1;
+		break;
+	case PKCS11_CKO_PRIVATE_KEY:
+		private = key1;
+		break;
 	default:
 		return PKCS11_CKR_ATTRIBUTE_VALUE_INVALID;
 	}
 
-	if (key2)
-		return PKCS11_CKR_ATTRIBUTE_VALUE_INVALID;
+	if (key2) {
+		switch (get_class(key2)) {
+		case PKCS11_CKO_PUBLIC_KEY:
+			public = key2;
+			if (private == key1)
+				break;
+
+			return PKCS11_CKR_TEMPLATE_INCONSISTENT;
+		case PKCS11_CKO_PRIVATE_KEY:
+			private = key2;
+			if (public == key1)
+				break;
+
+			return PKCS11_CKR_TEMPLATE_INCONSISTENT;
+		default:
+			return PKCS11_CKR_ATTRIBUTE_VALUE_INVALID;
+		}
+
+		if (get_key_type(private) != get_key_type(public))
+			return PKCS11_CKR_TEMPLATE_INCONSISTENT;
+	}
 
 	if (secret) {
 		switch (get_key_type(secret)) {
@@ -1224,6 +1275,33 @@ enum pkcs11_rc check_created_attrs(struct obj_attrs *key1,
 				       &key_length);
 		if (rc)
 			return PKCS11_CKR_TEMPLATE_INCOMPLETE;
+	}
+	if (public) {
+		switch (get_key_type(public)) {
+		case PKCS11_CKK_EC:
+			break;
+		default:
+			return PKCS11_CKR_TEMPLATE_INCONSISTENT;
+		}
+	}
+	if (private) {
+		switch (get_key_type(private)) {
+		case PKCS11_CKK_EC:
+			break;
+		default:
+			return PKCS11_CKR_TEMPLATE_INCONSISTENT;
+		}
+	}
+
+	/*
+	 * Check key size for symmetric keys and RSA keys
+	 * EC is bound to domains, no need to check here.
+	 */
+	switch (get_key_type(key1)) {
+	case PKCS11_CKK_EC:
+		return PKCS11_CKR_OK;
+	default:
+		break;
 	}
 
 	get_key_min_max_sizes(get_key_type(key1), &min_key_size, &max_key_size);
@@ -1385,6 +1463,27 @@ check_parent_attrs_against_processing(enum pkcs11_mechanism_id proc_id,
 		}
 		break;
 
+	case PKCS11_CKM_ECDSA:
+	case PKCS11_CKM_ECDSA_SHA1:
+	case PKCS11_CKM_ECDSA_SHA224:
+	case PKCS11_CKM_ECDSA_SHA256:
+	case PKCS11_CKM_ECDSA_SHA384:
+	case PKCS11_CKM_ECDSA_SHA512:
+		if (key_type != PKCS11_CKK_EC) {
+			EMSG("Invalid key %s for mechanism %s",
+			     id2str_type(key_type, key_class),
+			     id2str_proc(proc_id));
+
+			return PKCS11_CKR_KEY_TYPE_INCONSISTENT;
+		}
+		if (key_class != PKCS11_CKO_PUBLIC_KEY &&
+		    key_class != PKCS11_CKO_PRIVATE_KEY) {
+			EMSG("Invalid key class for mechanism %s",
+			     id2str_proc(proc_id));
+
+			return PKCS11_CKR_KEY_FUNCTION_NOT_PERMITTED;
+		}
+		break;
 	default:
 		DMSG("Invalid processing %#"PRIx32"/%s", proc_id,
 		     id2str_proc(proc_id));
@@ -1720,4 +1819,49 @@ enum pkcs11_rc set_key_data(struct obj_attrs **head, void *data,
 	default:
 		return PKCS11_CKR_GENERAL_ERROR;
 	}
+}
+
+enum pkcs11_rc add_missing_attribute_id(struct obj_attrs **pub_head,
+					struct obj_attrs **priv_head)
+{
+	enum pkcs11_rc rc = PKCS11_CKR_GENERAL_ERROR;
+	void *id1 = NULL;
+	uint32_t id1_size = 0;
+	void *id2 = NULL;
+	uint32_t id2_size = 0;
+
+	assert(pub_head);
+	assert(priv_head);
+
+	rc = get_attribute_ptr(*pub_head, PKCS11_CKA_ID, &id1, &id1_size);
+	if (rc) {
+		if (rc != PKCS11_RV_NOT_FOUND)
+			return rc;
+		id1 = NULL;
+	} else if (!id1_size) {
+		id1 = NULL;
+	}
+
+	rc = get_attribute_ptr(*priv_head, PKCS11_CKA_ID, &id2, &id2_size);
+	if (rc) {
+		if (rc != PKCS11_RV_NOT_FOUND)
+			return rc;
+		id2 = NULL;
+	} else if (!id2_size) {
+		id2 = NULL;
+	}
+
+	/* Both have value -- let them be what caller has specified them */
+	if (id1 && id2)
+		return PKCS11_CKR_OK;
+
+	/* Both are empty -- leave empty values */
+	if (!id1 && !id2)
+		return PKCS11_CKR_OK;
+
+	/* Cross copy CKA_ID value */
+	if (id1)
+		return set_attribute(priv_head, PKCS11_CKA_ID, id1, id1_size);
+	else
+		return set_attribute(pub_head, PKCS11_CKA_ID, id2, id2_size);
 }

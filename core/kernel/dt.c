@@ -5,6 +5,7 @@
 
 #include <assert.h>
 #include <kernel/dt.h>
+#include <kernel/interrupt.h>
 #include <kernel/linker.h>
 #include <libfdt.h>
 #include <mm/core_memprot.h>
@@ -49,27 +50,6 @@ bool dt_have_prop(const void *fdt, int offs, const char *propname)
 	prop = fdt_getprop(fdt, offs, propname, NULL);
 
 	return prop;
-}
-
-int dt_get_irq(void *fdt, int node)
-{
-	const uint32_t *int_prop = NULL;
-	int len_prop = 0;
-	int it_num = DT_INFO_INVALID_INTERRUPT;
-
-	/*
-	 * Interrupt property can be defined with at least 2x32 bits word
-	 *  - Type of interrupt
-	 *  - Interrupt Number
-	 */
-	int_prop = fdt_getprop(fdt, node, "interrupts", &len_prop);
-
-	if (!int_prop || len_prop < 2)
-		return it_num;
-
-	it_num = fdt32_to_cpu(int_prop[1]);
-
-	return it_num;
 }
 
 int dt_disable_status(void *fdt, int node)
@@ -143,14 +123,10 @@ int dt_map_dev(const void *fdt, int offs, vaddr_t *base, size_t *size)
 		mtype = MEM_AREA_IO_NSEC;
 
 	/* Check if we have a mapping, create one if needed */
-	if (!core_mmu_add_mapping(mtype, pbase, sz)) {
+	vbase = (vaddr_t)core_mmu_add_mapping(mtype, pbase, sz);
+	if (!vbase) {
 		EMSG("Failed to map %zu bytes at PA 0x%"PRIxPA,
 		     (size_t)sz, pbase);
-		return -1;
-	}
-	vbase = (vaddr_t)phys_to_virt(pbase, mtype);
-	if (!vbase) {
-		EMSG("Failed to get VA for PA 0x%"PRIxPA, pbase);
 		return -1;
 	}
 
@@ -288,6 +264,7 @@ void _fdt_fill_device_info(void *fdt, struct dt_node_info *info, int offs)
 		.reg = DT_INFO_INVALID_REG,
 		.clock = DT_INFO_INVALID_CLOCK,
 		.reset = DT_INFO_INVALID_RESET,
+		.interrupt = DT_INFO_INVALID_INTERRUPT,
 	};
 	const fdt32_t *cuint;
 
@@ -304,6 +281,8 @@ void _fdt_fill_device_info(void *fdt, struct dt_node_info *info, int offs)
 		cuint++;
 		dinfo.reset = (int)fdt32_to_cpu(*cuint);
 	}
+
+	dinfo.interrupt = dt_get_irq(fdt, offs);
 
 	dinfo.status = _fdt_get_status(fdt, offs);
 

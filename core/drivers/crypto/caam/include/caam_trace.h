@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * Copyright 2019-2020 NXP
+ * Copyright 2019-2021 NXP
  *
  * Brief   CAAM driver trace include file.
  *         Definition of the internal driver trace macros.
@@ -36,6 +36,10 @@
 #define DBG_TRACE_RSA	 BIT32(8)  /* RSA trace */
 #define DBG_TRACE_CIPHER BIT32(9)  /* Cipher dump Buffer */
 #define DBG_TRACE_BLOB   BIT32(10) /* BLOB trace */
+#define DBG_TRACE_DMAOBJ BIT32(11) /* DMA Object trace */
+#define DBG_TRACE_ECC    BIT32(12) /* ECC trace */
+#define DBG_TRACE_DH	 BIT32(13) /* DH trace */
+#define DBG_TRACE_DSA	 BIT32(14) /* DSA trace */
 
 /* HAL */
 #if CAAM_DBG_TRACE(HAL)
@@ -164,7 +168,7 @@
 #else
 #define CIPHER_DUMPDESC(desc)
 #endif
-#if CAAM_DBG_TRACE(CIPHER)
+#if CAAM_DBG_BUF(CIPHER)
 #define CIPHER_DUMPBUF DRV_DUMPBUF
 #else
 #define CIPHER_DUMPBUF(...)
@@ -173,6 +177,82 @@
 #define CIPHER_TRACE(...)
 #define CIPHER_DUMPDESC(desc)
 #define CIPHER_DUMPBUF(...)
+#endif
+
+/* DMA Object */
+#if CAAM_DBG_TRACE(DMAOBJ)
+#define DMAOBJ_TRACE DRV_TRACE
+#else
+#define DMAOBJ_TRACE(...)
+#endif
+
+/* ECC */
+#if CAAM_DBG_TRACE(ECC)
+#define ECC_TRACE DRV_TRACE
+#if CAAM_DBG_DESC(ECC)
+#define ECC_DUMPDESC(desc)                                                     \
+	do {                                                                   \
+		ECC_TRACE("ECC Descriptor");                                   \
+		DRV_DUMPDESC(desc);                                            \
+	} while (0)
+#else
+#define ECC_DUMPDESC(desc) do { } while (0)
+#endif
+#if CAAM_DBG_BUF(ECC)
+#define ECC_DUMPBUF DRV_DUMPBUF
+#else
+#define ECC_DUMPBUF(...) do { } while (0)
+#endif
+#else
+#define ECC_TRACE(...) do { } while (0)
+#define ECC_DUMPDESC(desc) do { } while (0)
+#define ECC_DUMPBUF(...) do { } while (0)
+#endif
+
+/* DH */
+#if CAAM_DBG_TRACE(DH)
+#define DH_TRACE DRV_TRACE
+#if CAAM_DBG_DESC(DH)
+#define DH_DUMPDESC(desc)                                                      \
+	{                                                                      \
+		DH_TRACE("DH Descriptor");                                     \
+		DRV_DUMPDESC(desc);                                            \
+	}
+#else
+#define DH_DUMPDESC(desc)
+#endif
+#if CAAM_DBG_BUF(DH)
+#define DH_DUMPBUF DRV_DUMPBUF
+#else
+#define DH_DUMPBUF(...)
+#endif
+#else
+#define DH_TRACE(...)
+#define DH_DUMPDESC(desc)
+#define DH_DUMPBUF(...)
+#endif
+
+/* DSA */
+#if CAAM_DBG_TRACE(DSA)
+#define DSA_TRACE DRV_TRACE
+#if CAAM_DBG_DESC(DSA)
+#define DSA_DUMPDESC(desc)                                                     \
+	do {                                                                   \
+		MP_TRACE("DSA Descriptor");                                    \
+		DRV_DUMPDESC(desc);                                            \
+	} while (0)
+#else
+#define DSA_DUMPDESC(desc)
+#endif
+#if CAAM_DBG_BUF(DSA)
+#define DSA_DUMPBUF DRV_DUMPBUF
+#else
+#define DSA_DUMPBUF(...)
+#endif
+#else
+#define DSA_TRACE(...)
+#define DSA_DUMPDESC(desc)
+#define DSA_DUMPBUF(...)
 #endif
 
 #if (TRACE_LEVEL >= TRACE_DEBUG)

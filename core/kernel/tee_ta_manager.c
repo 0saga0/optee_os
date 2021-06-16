@@ -169,10 +169,8 @@ static void tee_ta_clear_busy(struct tee_ta_ctx *ctx)
 	ctx->busy = false;
 	condvar_signal(&ctx->busy_cv);
 
-	if (!ctx->initializing && (ctx->flags & TA_FLAG_SINGLE_INSTANCE))
+	if (ctx->flags & TA_FLAG_SINGLE_INSTANCE)
 		unlock_single_instance();
-
-	ctx->initializing = false;
 
 	mutex_unlock(&tee_ta_mutex);
 }
@@ -924,7 +922,7 @@ static void gprof_update_session_utime(bool suspend, struct ts_session *s,
 static void tee_ta_update_session_utime(bool suspend)
 {
 	struct ts_session *s = ts_get_current_session();
-	uint64_t now = barrier_read_cntpct();
+	uint64_t now = barrier_read_counter_timer();
 
 	gprof_update_session_utime(suspend, s, now);
 }
@@ -951,7 +949,7 @@ static void ftrace_update_times(bool suspend)
 	if (!s)
 		return;
 
-	now = barrier_read_cntpct();
+	now = barrier_read_counter_timer();
 
 	fbuf = s->fbuf;
 	if (!fbuf)

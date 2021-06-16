@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
- * Copyright (c) 2015-2020, Linaro Limited
+ * Copyright (c) 2015-2021, Linaro Limited
  */
 
 #include <arm.h>
@@ -101,6 +101,14 @@ __weak void main_init_gic(void)
 /* May be overridden in plat-$(PLATFORM)/main.c */
 __weak void main_secondary_init_gic(void)
 {
+}
+
+/* May be overridden in plat-$(PLATFORM)/main.c */
+__weak unsigned long plat_get_aslr_seed(void)
+{
+	DMSG("Warning: no ASLR seed");
+
+	return 0;
 }
 
 #if defined(CFG_WITH_ARM_TRUSTED_FW)
@@ -507,7 +515,8 @@ static void init_runtime(unsigned long pageable_part)
 	assert(mm);
 	fobj = ro_paged_alloc(mm, hashes, paged_store);
 	assert(fobj);
-	tee_pager_add_core_area(tee_mm_get_smem(mm), PAGER_AREA_TYPE_RO, fobj);
+	tee_pager_add_core_region(tee_mm_get_smem(mm), PAGED_REGION_TYPE_RO,
+				  fobj);
 	fobj_put(fobj);
 
 	tee_pager_add_pages(pageable_start, init_size / SMALL_PAGE_SIZE, false);
@@ -1044,12 +1053,9 @@ static void init_external_dt(unsigned long phys_dt)
 		return;
 	}
 
-	if (!core_mmu_add_mapping(MEM_AREA_EXT_DT, phys_dt, CFG_DTB_MAX_SIZE))
-		panic("Failed to map external DTB");
-
-	fdt = phys_to_virt(phys_dt, MEM_AREA_EXT_DT);
+	fdt = core_mmu_add_mapping(MEM_AREA_EXT_DT, phys_dt, CFG_DTB_MAX_SIZE);
 	if (!fdt)
-		panic();
+		panic("Failed to map external DTB");
 
 	dt->blob = fdt;
 
@@ -1082,7 +1088,7 @@ static void update_external_dt(void)
 	if (!dt->blob)
 		return;
 
-	if (add_optee_dt_node(dt))
+	if (!IS_ENABLED(CFG_CORE_FFA) && add_optee_dt_node(dt))
 		panic("Failed to add OP-TEE Device Tree node");
 
 	if (config_psci(dt))
@@ -1358,27 +1364,31 @@ unsigned long __weak get_aslr_seed(void *fdt)
 
 	if (rc) {
 		DMSG("Bad fdt: %d", rc);
-		return 0;
+		goto err;
 	}
 
 	offs =  fdt_path_offset(fdt, "/secure-chosen");
 	if (offs < 0) {
 		DMSG("Cannot find /secure-chosen");
-		return 0;
+		goto err;
 	}
 	seed = fdt_getprop(fdt, offs, "kaslr-seed", &len);
 	if (!seed || len != sizeof(*seed)) {
 		DMSG("Cannot find valid kaslr-seed");
-		return 0;
+		goto err;
 	}
 
 	return fdt64_to_cpu(*seed);
+
+err:
+	/* Try platform implementation */
+	return plat_get_aslr_seed();
 }
 #else /*!CFG_DT*/
 unsigned long __weak get_aslr_seed(void *fdt __unused)
 {
-	DMSG("Warning: no ASLR seed");
-	return 0;
+	/* Try platform implementation */
+	return plat_get_aslr_seed();
 }
 #endif /*!CFG_DT*/
 #endif /*CFG_CORE_ASLR*/

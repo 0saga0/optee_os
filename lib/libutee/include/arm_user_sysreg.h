@@ -21,10 +21,14 @@ static inline __noprof void isb(void)
 	asm volatile ("isb");
 }
 
-static inline __noprof uint64_t barrier_read_cntpct(void)
+static inline __noprof uint64_t barrier_read_counter_timer(void)
 {
 	isb();
+#ifdef CFG_CORE_SEL2_SPMC
+	return read_cntvct();
+#else
 	return read_cntpct();
+#endif
 }
 #endif
 

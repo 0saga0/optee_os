@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, STMicroelectronics International N.V.
+ * Copyright (c) 2021, Linaro Limited
  */
 #ifndef TEE_MMU_TYPES_H
 #define TEE_MMU_TYPES_H
@@ -28,11 +29,11 @@
 #define TEE_MATTR_GLOBAL		BIT(10)
 #define TEE_MATTR_SECURE		BIT(11)
 
-#define TEE_MATTR_CACHE_MASK	0x7
-#define TEE_MATTR_CACHE_SHIFT	12
+#define TEE_MATTR_CACHE_MASK	U(0x7)
+#define TEE_MATTR_CACHE_SHIFT	U(12)
 /* These are shifted TEE_MATTR_CACHE_SHIFT */
-#define TEE_MATTR_CACHE_NONCACHE 0
-#define TEE_MATTR_CACHE_CACHED	1
+#define TEE_MATTR_CACHE_NONCACHE U(0)
+#define TEE_MATTR_CACHE_CACHED	U(1)
 
 /*
  * Tags TA mappings which are only used during a single call (open session
@@ -82,6 +83,25 @@ struct vm_region {
 	TAILQ_ENTRY(vm_region) link;
 };
 
+enum vm_paged_region_type {
+	PAGED_REGION_TYPE_RO,
+	PAGED_REGION_TYPE_RW,
+	PAGED_REGION_TYPE_LOCK,
+};
+
+struct vm_paged_region {
+	struct fobj *fobj;
+	size_t fobj_pgoffs;
+	enum vm_paged_region_type type;
+	uint32_t flags;
+	vaddr_t base;
+	size_t size;
+	struct pgt **pgt_array;
+	TAILQ_ENTRY(vm_paged_region) link;
+	TAILQ_ENTRY(vm_paged_region) fobj_link;
+};
+
+TAILQ_HEAD(vm_paged_region_head, vm_paged_region);
 TAILQ_HEAD(vm_region_head, vm_region);
 
 struct vm_info {

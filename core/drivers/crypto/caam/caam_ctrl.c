@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
- * Copyright 2017-2020 NXP
+ * Copyright 2017-2021 NXP
  *
  * Brief   CAAM Global Controller.
  */
@@ -97,6 +97,27 @@ static TEE_Result crypto_driver_init(void)
 
 	/* Initialize the CMAC Module */
 	retstatus = caam_cmac_init(jrcfg.base);
+	if (retstatus != CAAM_NO_ERROR) {
+		retresult = TEE_ERROR_GENERIC;
+		goto exit_init;
+	}
+
+	/* Initialize the ECC Module */
+	retstatus = caam_ecc_init(jrcfg.base);
+	if (retstatus != CAAM_NO_ERROR) {
+		retresult = TEE_ERROR_GENERIC;
+		goto exit_init;
+	}
+
+	/* Initialize the DH Module */
+	retstatus = caam_dh_init(jrcfg.base);
+	if (retstatus != CAAM_NO_ERROR) {
+		retresult = TEE_ERROR_GENERIC;
+		goto exit_init;
+	}
+
+	/* Initialize the DSA Module */
+	retstatus = caam_dsa_init(&jrcfg);
 	if (retstatus != CAAM_NO_ERROR) {
 		retresult = TEE_ERROR_GENERIC;
 		goto exit_init;

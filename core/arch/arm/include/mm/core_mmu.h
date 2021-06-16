@@ -18,7 +18,7 @@
 #include <platform_config.h>
 
 /* A small page is the smallest unit of memory that can be mapped */
-#define SMALL_PAGE_SHIFT	12
+#define SMALL_PAGE_SHIFT	U(12)
 #define SMALL_PAGE_SIZE		BIT(SMALL_PAGE_SHIFT)
 #define SMALL_PAGE_MASK		((paddr_t)SMALL_PAGE_SIZE - 1)
 
@@ -27,11 +27,11 @@
  * the pages.
  */
 #ifdef CFG_WITH_LPAE
-#define CORE_MMU_PGDIR_SHIFT	21
-#define CORE_MMU_PGDIR_LEVEL	3
+#define CORE_MMU_PGDIR_SHIFT	U(21)
+#define CORE_MMU_PGDIR_LEVEL	U(3)
 #else
-#define CORE_MMU_PGDIR_SHIFT	20
-#define CORE_MMU_PGDIR_LEVEL	2
+#define CORE_MMU_PGDIR_SHIFT	U(20)
+#define CORE_MMU_PGDIR_LEVEL	U(2)
 #endif
 #define CORE_MMU_PGDIR_SIZE		BIT(CORE_MMU_PGDIR_SHIFT)
 #define CORE_MMU_PGDIR_MASK		((paddr_t)CORE_MMU_PGDIR_SIZE - 1)
@@ -53,8 +53,8 @@
  * we rather not expose here. There's a compile time assertion to check
  * that these magic numbers are correct.
  */
-#define CORE_MMU_L1_TBL_OFFSET		(CFG_TEE_CORE_NB_CORE * \
-					 BIT(CFG_LPAE_ADDR_SPACE_BITS - 30) * 8)
+#define CORE_MMU_L1_TBL_OFFSET \
+	(CFG_TEE_CORE_NB_CORE * BIT(CFG_LPAE_ADDR_SPACE_BITS - U(30)) * U(8))
 #endif
 /*
  * TEE_RAM_VA_START:            The start virtual address of the TEE RAM
@@ -78,7 +78,7 @@
 					 (TEE_LOAD_ADDR - TEE_RAM_START))
 
 #ifndef STACK_ALIGNMENT
-#define STACK_ALIGNMENT			(sizeof(long) * 2)
+#define STACK_ALIGNMENT			(sizeof(long) * U(2))
 #endif
 
 #ifndef __ASSEMBLER__
@@ -428,8 +428,10 @@ void core_mmu_get_user_map(struct core_mmu_user_map *map);
 
 /*
  * core_mmu_set_user_map() - Set new MMU configuration for user VA space
- * @map:	If NULL will disable user VA space, if not NULL the user
- *		VA space to activate.
+ * @map:	User context MMU configuration or NULL to set core VA space
+ *
+ * Activate user VA space mapping and set its ASID if @map is not NULL,
+ * otherwise activate core mapping and set ASID to 0.
  */
 void core_mmu_set_user_map(struct core_mmu_user_map *map);
 
@@ -616,7 +618,8 @@ static inline bool core_mmu_is_shm_cached(void)
 
 TEE_Result core_mmu_remove_mapping(enum teecore_memtypes type, void *addr,
 				   size_t len);
-bool core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr, size_t len);
+void *core_mmu_add_mapping(enum teecore_memtypes type, paddr_t addr,
+			   size_t len);
 
 /*
  * tlbi_mva_range() - Invalidate TLB for virtual address range
@@ -701,6 +704,7 @@ struct mmu_partition *core_alloc_mmu_prtn(void *tables);
 void core_free_mmu_prtn(struct mmu_partition *prtn);
 void core_mmu_set_prtn(struct mmu_partition *prtn);
 void core_mmu_set_default_prtn(void);
+void core_mmu_set_default_prtn_tbl(void);
 
 void core_mmu_init_virtualization(void);
 #endif

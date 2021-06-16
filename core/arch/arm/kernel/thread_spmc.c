@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
- * Copyright (c) 2020, Linaro Limited.
+ * Copyright (c) 2020-2021, Linaro Limited.
  * Copyright (c) 2019-2021, Arm Limited. All rights reserved.
  */
 
 #include <assert.h>
 #include <ffa.h>
 #include <io.h>
+#include <initcall.h>
 #include <kernel/interrupt.h>
 #include <kernel/panic.h>
 #include <kernel/secure_partition.h>
@@ -27,54 +28,7 @@
 
 #include "thread_private.h"
 
-/* Table 39: Constituent memory region descriptor */
-struct constituent_address_range {
-	uint64_t address;
-	uint32_t page_count;
-	uint32_t reserved;
-};
-
-/* Table 38: Composite memory region descriptor */
-struct mem_region_descr {
-	uint32_t total_page_count;
-	uint32_t address_range_count;
-	uint64_t reserved;
-	struct constituent_address_range address_range_array[];
-};
-
-/* Table 40: Memory access permissions descriptor */
-struct mem_access_perm_descr {
-	uint16_t endpoint_id;
-	uint8_t access_perm;
-	uint8_t flags;
-};
-
-/* Table 41: Endpoint memory access descriptor */
-struct mem_accsess_descr {
-	struct mem_access_perm_descr mem_access_perm_descr;
-	uint32_t mem_region_offs;
-	uint64_t reserved;
-};
-
-/* Table 44: Lend, donate or share memory transaction descriptor */
-struct mem_transaction_descr {
-	uint16_t sender_id;
-	uint8_t mem_reg_attr;
-	uint8_t reserved0;
-	uint32_t flags;
-	uint64_t global_handle;
-	uint64_t tag;
-	uint32_t reserved1;
-	uint32_t mem_access_descr_count;
-	struct mem_accsess_descr mem_accsess_descr_array[];
-};
-
-struct ffa_partition_info {
-	uint16_t id;
-	uint16_t execution_context;
-	uint32_t partition_properties;
-};
-
+#if defined(CFG_CORE_SEL1_SPMC)
 struct mem_share_state {
 	struct mobj_ffa *mf;
 	unsigned int page_count;
@@ -88,37 +42,49 @@ struct mem_frag_state {
 	unsigned int frag_offset;
 	SLIST_ENTRY(mem_frag_state) link;
 };
+#endif
+
+/* Initialized in spmc_init() below */
+static uint16_t my_endpoint_id;
 
 /*
- * If @rxtx_size is 0 RX/TX buffers are not mapped or initialized.
+ * If struct ffa_rxtx::size is 0 RX/TX buffers are not mapped or initialized.
  *
- * @rxtx_spinlock protects the variables below from concurrent access
- * this includes the use of content of @rx_buf and @frag_state_head.
+ * struct ffa_rxtx::spin_lock protects the variables below from concurrent
+ * access this includes the use of content of struct ffa_rxtx::rx and
+ * @frag_state_head.
  *
- * @tx_buf_is_mine is true when we may write to tx_buf and false when it is
- * owned by normal world.
+ * struct ffa_rxtx::tx_buf_is_mine is true when we may write to struct
+ * ffa_rxtx::tx and false when it is owned by normal world.
  *
  * Note that we can't prevent normal world from updating the content of
  * these buffers so we must always be careful when reading. while we hold
  * the lock.
  */
-static void *rx_buf;
-static void *tx_buf;
-static unsigned int rxtx_size;
-static unsigned int rxtx_spinlock;
-static bool tx_buf_is_mine;
+
+#ifdef CFG_CORE_SEL2_SPMC
+static uint8_t __rx_buf[SMALL_PAGE_SIZE] __aligned(SMALL_PAGE_SIZE);
+static uint8_t __tx_buf[SMALL_PAGE_SIZE] __aligned(SMALL_PAGE_SIZE);
+static struct ffa_rxtx nw_rxtx = { .rx = __rx_buf, .tx = __tx_buf };
+#else
+static struct ffa_rxtx nw_rxtx;
+
+static bool is_nw_buf(struct ffa_rxtx *rxtx)
+{
+	return rxtx == &nw_rxtx;
+}
 
 static SLIST_HEAD(mem_frag_state_head, mem_frag_state) frag_state_head =
 	SLIST_HEAD_INITIALIZER(&frag_state_head);
+#endif
 
 static uint32_t swap_src_dst(uint32_t src_dst)
 {
 	return (src_dst >> 16) | (src_dst << 16);
 }
 
-static void set_args(struct thread_smc_args *args, uint32_t fid,
-		     uint32_t src_dst, uint32_t w2, uint32_t w3, uint32_t w4,
-		     uint32_t w5)
+void spmc_set_args(struct thread_smc_args *args, uint32_t fid, uint32_t src_dst,
+		   uint32_t w2, uint32_t w3, uint32_t w4, uint32_t w5)
 {
 	*args = (struct thread_smc_args){ .a0 = fid,
 					  .a1 = src_dst,
@@ -128,15 +94,17 @@ static void set_args(struct thread_smc_args *args, uint32_t fid,
 					  .a5 = w5, };
 }
 
-static void handle_version(struct thread_smc_args *args)
+#if defined(CFG_CORE_SEL1_SPMC)
+void spmc_handle_version(struct thread_smc_args *args)
 {
 	/*
 	 * We currently only support one version, 1.0 so let's keep it
 	 * simple.
 	 */
-	set_args(args, MAKE_FFA_VERSION(FFA_VERSION_MAJOR, FFA_VERSION_MINOR),
-		 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ,
-		 FFA_PARAM_MBZ);
+	spmc_set_args(args,
+		      MAKE_FFA_VERSION(FFA_VERSION_MAJOR, FFA_VERSION_MINOR),
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 }
 
 static void handle_features(struct thread_smc_args *args)
@@ -185,8 +153,8 @@ static void handle_features(struct thread_smc_args *args)
 		break;
 	}
 
-	set_args(args, ret_fid, FFA_PARAM_MBZ, ret_w2,
-		 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+	spmc_set_args(args, ret_fid, FFA_PARAM_MBZ, ret_w2, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 }
 
 static int map_buf(paddr_t pa, unsigned int sz, void **va_ret)
@@ -220,7 +188,7 @@ static void unmap_buf(void *va, size_t sz)
 	tee_mm_free(mm);
 }
 
-static void handle_rxtx_map(struct thread_smc_args *args)
+void spmc_handle_rxtx_map(struct thread_smc_args *args, struct ffa_rxtx *rxtx)
 {
 	int rc = 0;
 	uint32_t ret_fid = FFA_ERROR;
@@ -230,7 +198,7 @@ static void handle_rxtx_map(struct thread_smc_args *args)
 	void *rx = NULL;
 	void *tx = NULL;
 
-	cpu_spin_lock(&rxtx_spinlock);
+	cpu_spin_lock(&rxtx->spinlock);
 
 	if (args->a3 & GENMASK_64(63, 6)) {
 		rc = FFA_INVALID_PARAMETERS;
@@ -246,74 +214,98 @@ static void handle_rxtx_map(struct thread_smc_args *args)
 	tx_pa = args->a2;
 	rx_pa = args->a1;
 
-	if (rxtx_size) {
+	if (rxtx->size) {
 		rc = FFA_DENIED;
 		goto out;
 	}
 
-	rc = map_buf(tx_pa, sz, &tx);
-	if (rc)
-		goto out;
-	rc = map_buf(rx_pa, sz, &rx);
-	if (rc) {
-		unmap_buf(tx, sz);
-		goto out;
+	/*
+	 * If the buffer comes from a SP the address is virtual and already
+	 * mapped.
+	 */
+	if (is_nw_buf(rxtx)) {
+		rc = map_buf(tx_pa, sz, &tx);
+		if (rc)
+			goto out;
+		rc = map_buf(rx_pa, sz, &rx);
+		if (rc) {
+			unmap_buf(tx, sz);
+			goto out;
+		}
+		rxtx->tx = tx;
+		rxtx->rx = rx;
+	} else {
+		if ((tx_pa & SMALL_PAGE_MASK) || (rx_pa & SMALL_PAGE_MASK)) {
+			rc = FFA_INVALID_PARAMETERS;
+			goto out;
+		}
+
+		if (!virt_to_phys((void *)tx_pa) ||
+		    !virt_to_phys((void *)rx_pa)) {
+			rc = FFA_INVALID_PARAMETERS;
+			goto out;
+		}
+
+		rxtx->tx = (void *)tx_pa;
+		rxtx->rx = (void *)rx_pa;
 	}
 
-	tx_buf = tx;
-	rx_buf = rx;
-	rxtx_size = sz;
-	tx_buf_is_mine = true;
+	rxtx->size = sz;
+	rxtx->tx_is_mine = true;
 	ret_fid = FFA_SUCCESS_32;
 	DMSG("Mapped tx %#"PRIxPA" size %#x @ %p", tx_pa, sz, tx);
 	DMSG("Mapped rx %#"PRIxPA" size %#x @ %p", rx_pa, sz, rx);
 out:
-	cpu_spin_unlock(&rxtx_spinlock);
-	set_args(args, ret_fid, FFA_PARAM_MBZ, rc,
-		 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+	cpu_spin_unlock(&rxtx->spinlock);
+	spmc_set_args(args, ret_fid, FFA_PARAM_MBZ, rc, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 }
 
-static void handle_rxtx_unmap(struct thread_smc_args *args)
+void spmc_handle_rxtx_unmap(struct thread_smc_args *args, struct ffa_rxtx *rxtx)
 {
 	uint32_t ret_fid = FFA_ERROR;
 	int rc = FFA_INVALID_PARAMETERS;
 
-	cpu_spin_lock(&rxtx_spinlock);
+	cpu_spin_lock(&rxtx->spinlock);
 
-	if (!rxtx_size)
+	if (!rxtx->size)
 		goto out;
-	unmap_buf(rx_buf, rxtx_size);
-	unmap_buf(tx_buf, rxtx_size);
-	rxtx_size = 0;
-	rx_buf = NULL;
-	tx_buf = NULL;
+
+	/* We don't unmap the SP memory as the SP might still use it */
+	if (is_nw_buf(rxtx)) {
+		unmap_buf(rxtx->rx, rxtx->size);
+		unmap_buf(rxtx->tx, rxtx->size);
+	}
+	rxtx->size = 0;
+	rxtx->rx = NULL;
+	rxtx->tx = NULL;
 	ret_fid = FFA_SUCCESS_32;
 	rc = 0;
 out:
-	cpu_spin_unlock(&rxtx_spinlock);
-	set_args(args, ret_fid, FFA_PARAM_MBZ, rc,
-		 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+	cpu_spin_unlock(&rxtx->spinlock);
+	spmc_set_args(args, ret_fid, FFA_PARAM_MBZ, rc, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 }
 
-static void handle_rx_release(struct thread_smc_args *args)
+void spmc_handle_rx_release(struct thread_smc_args *args, struct ffa_rxtx *rxtx)
 {
 	uint32_t ret_fid = 0;
 	int rc = 0;
 
-	cpu_spin_lock(&rxtx_spinlock);
+	cpu_spin_lock(&rxtx->spinlock);
 	/* The senders RX is our TX */
-	if (!rxtx_size || tx_buf_is_mine) {
+	if (!rxtx->size || rxtx->tx_is_mine) {
 		ret_fid = FFA_ERROR;
 		rc = FFA_DENIED;
 	} else {
 		ret_fid = FFA_SUCCESS_32;
 		rc = 0;
-		tx_buf_is_mine = true;
+		rxtx->tx_is_mine = true;
 	}
-	cpu_spin_unlock(&rxtx_spinlock);
+	cpu_spin_unlock(&rxtx->spinlock);
 
-	set_args(args, ret_fid, FFA_PARAM_MBZ, rc,
-		 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+	spmc_set_args(args, ret_fid, FFA_PARAM_MBZ, rc, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 }
 
 static bool is_nil_uuid(uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3)
@@ -321,54 +313,65 @@ static bool is_nil_uuid(uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3)
 	return !w0 && !w1 && !w2 && !w3;
 }
 
-static bool is_optee_os_uuid(uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3)
+static bool is_my_uuid(uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3)
 {
-	return w0 == OPTEE_MSG_OS_OPTEE_UUID_0 &&
-	       w1 == OPTEE_MSG_OS_OPTEE_UUID_1 &&
-	       w2 == OPTEE_MSG_OS_OPTEE_UUID_2 &&
-	       w3 == OPTEE_MSG_OS_OPTEE_UUID_3;
+	/*
+	 * This depends on which UUID we have been assigned.
+	 * TODO add a generic mechanism to obtain our UUID.
+	 *
+	 * The test below is for the hard coded UUID
+	 * 486178e0-e7f8-11e3-bc5e-0002a5d5c51b
+	 */
+	return w0 == 0xe0786148 && w1 == 0xe311f8e7 &&
+	       w2 == 0x02005ebc && w3 == 0x1bc5d5a5;
 }
 
-static void handle_partition_info_get(struct thread_smc_args *args)
+static void handle_partition_info_get(struct thread_smc_args *args,
+				      struct ffa_rxtx *rxtx)
 {
 	uint32_t ret_fid = 0;
 	int rc = 0;
 
 	if (!is_nil_uuid(args->a1, args->a2, args->a3, args->a4) &&
-	    !is_optee_os_uuid(args->a1, args->a2, args->a3, args->a4)) {
+	    !is_my_uuid(args->a1, args->a2, args->a3, args->a4)) {
 		ret_fid = FFA_ERROR;
 		rc = FFA_INVALID_PARAMETERS;
 		goto out;
 	}
 
-	cpu_spin_lock(&rxtx_spinlock);
-	if (rxtx_size && tx_buf_is_mine) {
-		struct ffa_partition_info *fpi = tx_buf;
+	cpu_spin_lock(&rxtx->spinlock);
+	if (rxtx->size && rxtx->tx_is_mine) {
+		struct ffa_partition_info *fpi = rxtx->tx;
 
-		fpi->id = SPMC_ENDPOINT_ID;
+		fpi->id = my_endpoint_id;
 		fpi->execution_context = CFG_TEE_CORE_NB_CORE;
+		/*
+		 * Supports receipt of direct requests.
+		 * Can send direct requests.
+		 */
 		fpi->partition_properties = BIT(0) | BIT(1);
 
 		ret_fid = FFA_SUCCESS_32;
 		rc = 1;
-		tx_buf_is_mine = false;
+		rxtx->tx_is_mine = false;
 	} else {
 		ret_fid = FFA_ERROR;
-		if (rxtx_size)
+		if (rxtx->size)
 			rc = FFA_BUSY;
 		else
 			rc = FFA_DENIED; /* TX buffer not setup yet */
 	}
-	cpu_spin_unlock(&rxtx_spinlock);
+	cpu_spin_unlock(&rxtx->spinlock);
 
 out:
-	set_args(args, ret_fid, FFA_PARAM_MBZ, rc,
-		 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+	spmc_set_args(args, ret_fid, FFA_PARAM_MBZ, rc, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 }
+#endif /*CFG_CORE_SEL1_SPMC*/
 
 static void handle_yielding_call(struct thread_smc_args *args)
 {
-	uint32_t ret_val = 0;
+	TEE_Result res = 0;
 
 	thread_check_canaries();
 
@@ -376,31 +379,59 @@ static void handle_yielding_call(struct thread_smc_args *args)
 		/* Note connection to struct thread_rpc_arg::ret */
 		thread_resume_from_rpc(args->a7, args->a4, args->a5, args->a6,
 				       0);
-		ret_val = FFA_INVALID_PARAMETERS;
+		res = TEE_ERROR_BAD_PARAMETERS;
 	} else {
-		thread_alloc_and_run(args->a1, args->a3, args->a4, args->a5);
-		ret_val = FFA_BUSY;
+		thread_alloc_and_run(args->a1, args->a3, args->a4, args->a5,
+				     args->a6, args->a7);
+		res = TEE_ERROR_BUSY;
 	}
-	set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
-		 swap_src_dst(args->a1), 0, ret_val, 0, 0);
+	spmc_set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
+		      swap_src_dst(args->a1), 0, res, 0, 0);
+}
+
+static uint32_t handle_unregister_shm(uint32_t a4, uint32_t a5)
+{
+	uint64_t cookie = reg_pair_to_64(a5, a4);
+	uint32_t res = 0;
+
+	res = mobj_ffa_unregister_by_cookie(cookie);
+	switch (res) {
+	case TEE_SUCCESS:
+	case TEE_ERROR_ITEM_NOT_FOUND:
+		return 0;
+	case TEE_ERROR_BUSY:
+		EMSG("res %#"PRIx32, res);
+		return FFA_BUSY;
+	default:
+		EMSG("res %#"PRIx32, res);
+		return FFA_INVALID_PARAMETERS;
+	}
 }
 
 static void handle_blocking_call(struct thread_smc_args *args)
 {
 	switch (args->a3) {
 	case OPTEE_FFA_GET_API_VERSION:
-		set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
-			 swap_src_dst(args->a1), 0, OPTEE_FFA_VERSION_MAJOR,
-			 OPTEE_FFA_VERSION_MINOR, 0);
+		spmc_set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
+			      swap_src_dst(args->a1), 0,
+			      OPTEE_FFA_VERSION_MAJOR, OPTEE_FFA_VERSION_MINOR,
+			      0);
 		break;
 	case OPTEE_FFA_GET_OS_VERSION:
-		set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
-			 swap_src_dst(args->a1), 0, CFG_OPTEE_REVISION_MAJOR,
-			 CFG_OPTEE_REVISION_MINOR, TEE_IMPL_GIT_SHA1);
+		spmc_set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
+			      swap_src_dst(args->a1), 0,
+			      CFG_OPTEE_REVISION_MAJOR,
+			      CFG_OPTEE_REVISION_MINOR, TEE_IMPL_GIT_SHA1);
 		break;
 	case OPTEE_FFA_EXCHANGE_CAPABILITIES:
-		set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
-			 swap_src_dst(args->a1), 0, 0, 0, 0);
+		spmc_set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
+			      swap_src_dst(args->a1), 0, 0,
+			      THREAD_RPC_MAX_NUM_PARAMS, 0);
+		break;
+	case OPTEE_FFA_UNREGISTER_SHM:
+		spmc_set_args(args, FFA_MSG_SEND_DIRECT_RESP_32,
+			      swap_src_dst(args->a1), 0,
+			      handle_unregister_shm(args->a4, args->a5), 0, 0);
 		break;
 	default:
 		EMSG("Unhandled blocking service ID %#"PRIx32,
@@ -409,19 +440,19 @@ static void handle_blocking_call(struct thread_smc_args *args)
 	}
 }
 
-static int get_acc_perms(struct mem_accsess_descr *mem_acc,
+#if defined(CFG_CORE_SEL1_SPMC)
+static int get_acc_perms(struct ffa_mem_access *mem_acc,
 			 unsigned int num_mem_accs, uint8_t *acc_perms,
 			 unsigned int *region_offs)
 {
 	unsigned int n = 0;
 
 	for (n = 0; n < num_mem_accs; n++) {
-		struct mem_access_perm_descr *descr =
-			&mem_acc[n].mem_access_perm_descr;
+		struct ffa_mem_access_perm *descr = &mem_acc[n].access_perm;
 
-		if (READ_ONCE(descr->endpoint_id) == SPMC_ENDPOINT_ID) {
-			*acc_perms = READ_ONCE(descr->access_perm);
-			*region_offs = READ_ONCE(mem_acc[n].mem_region_offs);
+		if (READ_ONCE(descr->endpoint_id) == my_endpoint_id) {
+			*acc_perms = READ_ONCE(descr->perm);
+			*region_offs = READ_ONCE(mem_acc[n].region_offs);
 			return 0;
 		}
 	}
@@ -432,25 +463,24 @@ static int get_acc_perms(struct mem_accsess_descr *mem_acc,
 static int mem_share_init(void *buf, size_t blen, unsigned int *page_count,
 			  unsigned int *region_count, size_t *addr_range_offs)
 {
-	struct mem_region_descr *region_descr = NULL;
-	struct mem_transaction_descr *descr = NULL;
-	const uint8_t exp_mem_acc_perm = 0x6; /* Not executable, Read-write */
-	/* Normal memory, Write-Back cacheable, Inner shareable */
-	const uint8_t exp_mem_reg_attr = 0x2f;
+	const uint8_t exp_mem_reg_attr = FFA_NORMAL_MEM_REG_ATTR;
+	const uint8_t exp_mem_acc_perm = FFA_MEM_ACC_RW;
+	struct ffa_mem_region *region_descr = NULL;
+	struct ffa_mem_transaction *descr = NULL;
 	unsigned int num_mem_accs = 0;
 	uint8_t mem_acc_perm = 0;
 	unsigned int region_descr_offs = 0;
 	size_t n = 0;
 
-	if (!ALIGNMENT_IS_OK(buf, struct mem_transaction_descr) ||
-	    blen < sizeof(struct mem_transaction_descr))
+	if (!ALIGNMENT_IS_OK(buf, struct ffa_mem_transaction) ||
+	    blen < sizeof(struct ffa_mem_transaction))
 		return FFA_INVALID_PARAMETERS;
 
 	descr = buf;
 
 	/* Check that the endpoint memory access descriptor array fits */
-	num_mem_accs = READ_ONCE(descr->mem_access_descr_count);
-	if (MUL_OVERFLOW(sizeof(struct mem_accsess_descr), num_mem_accs, &n) ||
+	num_mem_accs = READ_ONCE(descr->mem_access_count);
+	if (MUL_OVERFLOW(sizeof(struct ffa_mem_access), num_mem_accs, &n) ||
 	    ADD_OVERFLOW(sizeof(*descr), n, &n) || n > blen)
 		return FFA_INVALID_PARAMETERS;
 
@@ -458,7 +488,7 @@ static int mem_share_init(void *buf, size_t blen, unsigned int *page_count,
 		return FFA_INVALID_PARAMETERS;
 
 	/* Check that the access permissions matches what's expected */
-	if (get_acc_perms(descr->mem_accsess_descr_array,
+	if (get_acc_perms(descr->mem_access_array,
 			  num_mem_accs, &mem_acc_perm, &region_descr_offs) ||
 	    mem_acc_perm != exp_mem_acc_perm)
 		return FFA_INVALID_PARAMETERS;
@@ -469,11 +499,11 @@ static int mem_share_init(void *buf, size_t blen, unsigned int *page_count,
 		return FFA_INVALID_PARAMETERS;
 
 	if (!ALIGNMENT_IS_OK((vaddr_t)descr + region_descr_offs,
-			     struct mem_region_descr))
+			     struct ffa_mem_region))
 		return FFA_INVALID_PARAMETERS;
 
-	region_descr = (struct mem_region_descr *)((vaddr_t)descr +
-						    region_descr_offs);
+	region_descr = (struct ffa_mem_region *)((vaddr_t)descr +
+						 region_descr_offs);
 	*page_count = READ_ONCE(region_descr->total_page_count);
 	*region_count = READ_ONCE(region_descr->address_range_count);
 	*addr_range_offs = n;
@@ -483,15 +513,14 @@ static int mem_share_init(void *buf, size_t blen, unsigned int *page_count,
 static int add_mem_share_helper(struct mem_share_state *s, void *buf,
 				size_t flen)
 {
-	unsigned int region_count = flen /
-				    sizeof(struct constituent_address_range);
-	struct constituent_address_range *arange = NULL;
+	unsigned int region_count = flen / sizeof(struct ffa_address_range);
+	struct ffa_address_range *arange = NULL;
 	unsigned int n = 0;
 
 	if (region_count > s->region_count)
 		region_count = s->region_count;
 
-	if (!ALIGNMENT_IS_OK(buf, struct constituent_address_range))
+	if (!ALIGNMENT_IS_OK(buf, struct ffa_address_range))
 		return FFA_INVALID_PARAMETERS;
 	arange = buf;
 
@@ -557,7 +586,7 @@ static int add_mem_share(tee_mm_entry_t *mm, void *buf, size_t blen,
 		return rc;
 
 	if (MUL_OVERFLOW(share.region_count,
-			 sizeof(struct constituent_address_range), &n) ||
+			 sizeof(struct ffa_address_range), &n) ||
 	    ADD_OVERFLOW(n, addr_range_offs, &n) || n > blen)
 		return FFA_INVALID_PARAMETERS;
 
@@ -607,7 +636,7 @@ err:
 
 static int handle_mem_share_tmem(paddr_t pbuf, size_t blen, size_t flen,
 				 unsigned int page_count,
-				 uint64_t *global_handle)
+				 uint64_t *global_handle, struct ffa_rxtx *rxtx)
 {
 	int rc = 0;
 	size_t len = 0;
@@ -636,10 +665,10 @@ static int handle_mem_share_tmem(paddr_t pbuf, size_t blen, size_t flen,
 		goto out;
 	}
 
-	cpu_spin_lock(&rxtx_spinlock);
+	cpu_spin_lock(&rxtx->spinlock);
 	rc = add_mem_share(mm, (void *)(tee_mm_get_smem(mm) + offs), blen, flen,
 			   global_handle);
-	cpu_spin_unlock(&rxtx_spinlock);
+	cpu_spin_unlock(&rxtx->spinlock);
 	if (rc > 0)
 		return rc;
 
@@ -650,21 +679,23 @@ out:
 }
 
 static int handle_mem_share_rxbuf(size_t blen, size_t flen,
-				  uint64_t *global_handle)
+				  uint64_t *global_handle,
+				  struct ffa_rxtx *rxtx)
 {
 	int rc = FFA_DENIED;
 
-	cpu_spin_lock(&rxtx_spinlock);
+	cpu_spin_lock(&rxtx->spinlock);
 
-	if (rx_buf && flen <= rxtx_size)
-		rc = add_mem_share(NULL, rx_buf, blen, flen, global_handle);
+	if (rxtx->rx && flen <= rxtx->size)
+		rc = add_mem_share(NULL, rxtx->rx, blen, flen, global_handle);
 
-	cpu_spin_unlock(&rxtx_spinlock);
+	cpu_spin_unlock(&rxtx->spinlock);
 
 	return rc;
 }
 
-static void handle_mem_share(struct thread_smc_args *args)
+static void handle_mem_share(struct thread_smc_args *args,
+			     struct ffa_rxtx *rxtx)
 {
 	uint32_t ret_w1 = 0;
 	uint32_t ret_w2 = FFA_INVALID_PARAMETERS;
@@ -684,10 +715,11 @@ static void handle_mem_share(struct thread_smc_args *args)
 		 */
 		if (args->a4)
 			goto out;
-		rc = handle_mem_share_rxbuf(args->a1, args->a2, &global_handle);
+		rc = handle_mem_share_rxbuf(args->a1, args->a2, &global_handle,
+					    rxtx);
 	} else {
 		rc = handle_mem_share_tmem(args->a3, args->a1, args->a2,
-					   args->a4, &global_handle);
+					   args->a4, &global_handle, rxtx);
 	}
 	if (rc < 0) {
 		ret_w2 = rc;
@@ -701,7 +733,7 @@ static void handle_mem_share(struct thread_smc_args *args)
 	ret_fid = FFA_SUCCESS_32;
 	reg_pair_from_64(global_handle, &ret_w3, &ret_w2);
 out:
-	set_args(args, ret_fid, ret_w1, ret_w2, ret_w3, 0, 0);
+	spmc_set_args(args, ret_fid, ret_w1, ret_w2, ret_w3, 0, 0);
 }
 
 static struct mem_frag_state *get_frag_state(uint64_t global_handle)
@@ -715,7 +747,8 @@ static struct mem_frag_state *get_frag_state(uint64_t global_handle)
 	return NULL;
 }
 
-static void handle_mem_frag_tx(struct thread_smc_args *args)
+static void handle_mem_frag_tx(struct thread_smc_args *args,
+			       struct ffa_rxtx *rxtx)
 {
 	int rc = 0;
 	uint64_t global_handle = reg_pair_to_64(READ_ONCE(args->a2),
@@ -735,7 +768,7 @@ static void handle_mem_frag_tx(struct thread_smc_args *args)
 	 * requests.
 	 */
 
-	cpu_spin_lock(&rxtx_spinlock);
+	cpu_spin_lock(&rxtx->spinlock);
 
 	s = get_frag_state(global_handle);
 	if (!s) {
@@ -752,16 +785,16 @@ static void handle_mem_frag_tx(struct thread_smc_args *args)
 		page_count = s->share.page_count;
 		buf = (void *)tee_mm_get_smem(mm);
 	} else {
-		if (flen > rxtx_size) {
+		if (flen > rxtx->size) {
 			rc = FFA_INVALID_PARAMETERS;
 			goto out;
 		}
-		buf = rx_buf;
+		buf = rxtx->rx;
 	}
 
 	rc = add_mem_share_frag(s, buf, flen);
 out:
-	cpu_spin_unlock(&rxtx_spinlock);
+	cpu_spin_unlock(&rxtx->spinlock);
 
 	if (rc <= 0 && mm) {
 		core_mmu_unmap_pages(tee_mm_get_smem(mm), page_count);
@@ -780,7 +813,7 @@ out:
 		reg_pair_from_64(global_handle, &ret_w3, &ret_w2);
 	}
 
-	set_args(args, ret_fid, ret_w1, ret_w2, ret_w3, 0, 0);
+	spmc_set_args(args, ret_fid, ret_w1, ret_w2, ret_w3, 0, 0);
 }
 
 static void handle_mem_reclaim(struct thread_smc_args *args)
@@ -808,8 +841,9 @@ static void handle_mem_reclaim(struct thread_smc_args *args)
 		break;
 	}
 out:
-	set_args(args, ret_fid, ret_val, 0, 0, 0, 0);
+	spmc_set_args(args, ret_fid, ret_val, 0, 0, 0, 0);
 }
+#endif
 
 /* Only called from assembly */
 void thread_spmc_msg_recv(struct thread_smc_args *args);
@@ -817,8 +851,9 @@ void thread_spmc_msg_recv(struct thread_smc_args *args)
 {
 	assert((thread_get_exceptions() & THREAD_EXCP_ALL) == THREAD_EXCP_ALL);
 	switch (args->a0) {
+#if defined(CFG_CORE_SEL1_SPMC)
 	case FFA_VERSION:
-		handle_version(args);
+		spmc_handle_version(args);
 		break;
 	case FFA_FEATURES:
 		handle_features(args);
@@ -827,24 +862,25 @@ void thread_spmc_msg_recv(struct thread_smc_args *args)
 	case FFA_RXTX_MAP_64:
 #endif
 	case FFA_RXTX_MAP_32:
-		handle_rxtx_map(args);
+		spmc_handle_rxtx_map(args, &nw_rxtx);
 		break;
 	case FFA_RXTX_UNMAP:
-		handle_rxtx_unmap(args);
+		spmc_handle_rxtx_unmap(args, &nw_rxtx);
 		break;
 	case FFA_RX_RELEASE:
-		handle_rx_release(args);
+		spmc_handle_rx_release(args, &nw_rxtx);
 		break;
 	case FFA_PARTITION_INFO_GET:
-		handle_partition_info_get(args);
+		handle_partition_info_get(args, &nw_rxtx);
 		break;
+#endif /*CFG_CORE_SEL1_SPMC*/
 	case FFA_INTERRUPT:
 		itr_core_handler();
-		set_args(args, FFA_SUCCESS_32, args->a1, 0, 0, 0, 0);
+		spmc_set_args(args, FFA_SUCCESS_32, args->a1, 0, 0, 0, 0);
 		break;
 	case FFA_MSG_SEND_DIRECT_REQ_32:
 		if (IS_ENABLED(CFG_SECURE_PARTITION) &&
-		    FFA_DST(args->a1) != SPMC_ENDPOINT_ID) {
+		    FFA_DST(args->a1) != my_endpoint_id) {
 			spmc_sp_start_thread(args);
 			break;
 		}
@@ -854,31 +890,36 @@ void thread_spmc_msg_recv(struct thread_smc_args *args)
 		else
 			handle_blocking_call(args);
 		break;
+#if defined(CFG_CORE_SEL1_SPMC)
 #ifdef ARM64
 	case FFA_MEM_SHARE_64:
 #endif
 	case FFA_MEM_SHARE_32:
-		handle_mem_share(args);
+		handle_mem_share(args, &nw_rxtx);
 		break;
 	case FFA_MEM_RECLAIM:
 		handle_mem_reclaim(args);
 		break;
 	case FFA_MEM_FRAG_TX:
-		handle_mem_frag_tx(args);
+		handle_mem_frag_tx(args, &nw_rxtx);
 		break;
+#endif /*CFG_CORE_SEL1_SPMC*/
 	default:
 		EMSG("Unhandled FFA function ID %#"PRIx32, (uint32_t)args->a0);
-		set_args(args, FFA_ERROR, FFA_PARAM_MBZ, FFA_NOT_SUPPORTED,
-			 FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+		spmc_set_args(args, FFA_ERROR, FFA_PARAM_MBZ, FFA_NOT_SUPPORTED,
+			      FFA_PARAM_MBZ, FFA_PARAM_MBZ, FFA_PARAM_MBZ);
 	}
 }
 
-static uint32_t yielding_call_with_arg(uint64_t cookie)
+static uint32_t yielding_call_with_arg(uint64_t cookie, uint32_t offset)
 {
+	size_t sz_rpc = OPTEE_MSG_GET_ARG_SIZE(THREAD_RPC_MAX_NUM_PARAMS);
+	struct thread_ctx *thr = threads + thread_get_id();
 	uint32_t rv = TEE_ERROR_BAD_PARAMETERS;
 	struct optee_msg_arg *arg = NULL;
 	struct mobj *mobj = NULL;
 	uint32_t num_params = 0;
+	size_t sz = 0;
 
 	mobj = mobj_ffa_get_by_cookie(cookie, 0);
 	if (!mobj) {
@@ -891,7 +932,7 @@ static uint32_t yielding_call_with_arg(uint64_t cookie)
 		goto out_put_mobj;
 
 	rv = TEE_ERROR_BAD_PARAMETERS;
-	arg = mobj_get_va(mobj, 0);
+	arg = mobj_get_va(mobj, offset);
 	if (!arg)
 		goto out_dec_map;
 
@@ -902,35 +943,21 @@ static uint32_t yielding_call_with_arg(uint64_t cookie)
 	if (num_params > OPTEE_MSG_MAX_NUM_PARAMS)
 		goto out_dec_map;
 
-	if (!mobj_get_va(mobj, OPTEE_MSG_GET_ARG_SIZE(num_params)))
+	sz = OPTEE_MSG_GET_ARG_SIZE(num_params);
+	thr->rpc_arg = mobj_get_va(mobj, offset + sz);
+	if (!thr->rpc_arg || !mobj_get_va(mobj, offset + sz + sz_rpc))
 		goto out_dec_map;
 
 	rv = tee_entry_std(arg, num_params);
 
-	thread_rpc_shm_cache_clear(&threads[thread_get_id()].shm_cache);
+	thread_rpc_shm_cache_clear(&thr->shm_cache);
+	thr->rpc_arg = NULL;
 
 out_dec_map:
 	mobj_dec_map(mobj);
 out_put_mobj:
 	mobj_put(mobj);
 	return rv;
-}
-
-static uint32_t yielding_unregister_shm(uint64_t cookie)
-{
-	uint32_t res = mobj_ffa_unregister_by_cookie(cookie);
-
-	switch (res) {
-	case TEE_SUCCESS:
-	case TEE_ERROR_ITEM_NOT_FOUND:
-		return 0;
-	case TEE_ERROR_BUSY:
-		EMSG("res %#"PRIx32, res);
-		return FFA_BUSY;
-	default:
-		EMSG("res %#"PRIx32, res);
-		return FFA_INVALID_PARAMETERS;
-	}
 }
 
 /*
@@ -940,7 +967,8 @@ static uint32_t yielding_unregister_shm(uint64_t cookie)
  * the unpaged area.
  */
 uint32_t __weak __thread_std_smc_entry(uint32_t a0, uint32_t a1,
-				       uint32_t a2, uint32_t a3)
+				       uint32_t a2, uint32_t a3,
+				       uint32_t a4, uint32_t a5 __unused)
 {
 	/*
 	 * Arguments are supplied from handle_yielding_call() as:
@@ -948,18 +976,13 @@ uint32_t __weak __thread_std_smc_entry(uint32_t a0, uint32_t a1,
 	 * a1 <- w3
 	 * a2 <- w4
 	 * a3 <- w5
+	 * a4 <- w6
+	 * a5 <- w7
 	 */
 	thread_get_tsd()->rpc_target_info = swap_src_dst(a0);
-	switch (a1) {
-	case OPTEE_FFA_YIELDING_CALL_WITH_ARG:
-		return yielding_call_with_arg(reg_pair_to_64(a3, a2));
-	case OPTEE_FFA_YIELDING_CALL_REGISTER_SHM:
-		return FFA_NOT_SUPPORTED;
-	case OPTEE_FFA_YIELDING_CALL_UNREGISTER_SHM:
-		return yielding_unregister_shm(reg_pair_to_64(a3, a2));
-	default:
-		return FFA_DENIED;
-	}
+	if (a1 == OPTEE_FFA_YIELDING_CALL_WITH_ARG)
+		return yielding_call_with_arg(reg_pair_to_64(a3, a2), a4);
+	return FFA_DENIED;
 }
 
 static bool set_fmem(struct optee_msg_param *param, struct thread_param *tpm)
@@ -976,101 +999,22 @@ static bool set_fmem(struct optee_msg_param *param, struct thread_param *tpm)
 
 	param->u.fmem.size = tpm->u.memref.size;
 	if (tpm->u.memref.mobj) {
-		param->u.fmem.global_id = mobj_get_cookie(tpm->u.memref.mobj);
-		if (!param->u.fmem.global_id)
+		uint64_t cookie = mobj_get_cookie(tpm->u.memref.mobj);
+
+		/* If a mobj is passed it better be one with a valid cookie. */
+		if (cookie == OPTEE_MSG_FMEM_INVALID_GLOBAL_ID)
 			return false;
+		param->u.fmem.global_id = cookie;
 	} else {
-		param->u.fmem.global_id = 0;
+		param->u.fmem.global_id = OPTEE_MSG_FMEM_INVALID_GLOBAL_ID;
 	}
 
 	return true;
 }
 
-static void thread_rpc_free(uint32_t type, uint64_t cookie, struct mobj *mobj)
-{
-	TEE_Result res = TEE_SUCCESS;
-	struct thread_rpc_arg rpc_arg = { .call = {
-			.w1 = thread_get_tsd()->rpc_target_info,
-			.w4 = type,
-		},
-	};
-
-	reg_pair_from_64(cookie, &rpc_arg.call.w6, &rpc_arg.call.w5);
-	mobj_put(mobj);
-	res = mobj_ffa_unregister_by_cookie(cookie);
-	if (res)
-		DMSG("mobj_ffa_unregister_by_cookie(%#"PRIx64"): res %#"PRIx32,
-		     cookie, res);
-	thread_rpc(&rpc_arg);
-}
-
-static struct mobj *thread_rpc_alloc(size_t size, uint32_t type)
-{
-	struct mobj *mobj = NULL;
-	unsigned int page_count = ROUNDUP(size, SMALL_PAGE_SIZE) /
-				  SMALL_PAGE_SIZE;
-	struct thread_rpc_arg rpc_arg = { .call = {
-			.w1 = thread_get_tsd()->rpc_target_info,
-			.w4 = type,
-			.w5 = page_count,
-		},
-	};
-	unsigned int internal_offset = 0;
-	uint64_t cookie = 0;
-
-	thread_rpc(&rpc_arg);
-
-	cookie = reg_pair_to_64(rpc_arg.ret.w5, rpc_arg.ret.w4);
-	if (!cookie)
-		return NULL;
-	internal_offset = rpc_arg.ret.w6;
-
-	mobj = mobj_ffa_get_by_cookie(cookie, internal_offset);
-	if (!mobj) {
-		DMSG("mobj_ffa_get_by_cookie(%#"PRIx64", %#x): failed",
-		     cookie, internal_offset);
-		return NULL;
-	}
-
-	assert(mobj_is_nonsec(mobj));
-
-	if (mobj_inc_map(mobj)) {
-		DMSG("mobj_inc_map(%#"PRIx64"): failed", cookie);
-		mobj_put(mobj);
-		return NULL;
-	}
-
-	return mobj;
-}
-
-struct mobj *thread_rpc_alloc_payload(size_t size)
-{
-	return thread_rpc_alloc(size,
-				OPTEE_FFA_YIELDING_CALL_RETURN_ALLOC_SUPPL_SHM);
-}
-
-void thread_rpc_free_payload(struct mobj *mobj)
-{
-	thread_rpc_free(OPTEE_FFA_YIELDING_CALL_RETURN_FREE_SUPPL_SHM,
-			mobj_get_cookie(mobj), mobj);
-}
-
-struct mobj *thread_rpc_alloc_kernel_payload(size_t size)
-{
-	return thread_rpc_alloc(size,
-				OPTEE_FFA_YIELDING_CALL_RETURN_ALLOC_KERN_SHM);
-}
-
-void thread_rpc_free_kernel_payload(struct mobj *mobj)
-{
-	thread_rpc_free(OPTEE_FFA_YIELDING_CALL_RETURN_FREE_KERN_SHM,
-			mobj_get_cookie(mobj), mobj);
-}
-
 static uint32_t get_rpc_arg(uint32_t cmd, size_t num_params,
 			    struct thread_param *params,
-			    struct optee_msg_arg **arg_ret,
-			    uint64_t *carg_ret)
+			    struct optee_msg_arg **arg_ret)
 {
 	size_t sz = OPTEE_MSG_GET_ARG_SIZE(THREAD_RPC_MAX_NUM_PARAMS);
 	struct thread_ctx *thr = threads + thread_get_id();
@@ -1080,19 +1024,8 @@ static uint32_t get_rpc_arg(uint32_t cmd, size_t num_params,
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (!arg) {
-		struct mobj *mobj = thread_rpc_alloc_kernel_payload(sz);
-
-		if (!mobj)
-			return TEE_ERROR_OUT_OF_MEMORY;
-
-		arg = mobj_get_va(mobj, 0);
-		if (!arg) {
-			thread_rpc_free_kernel_payload(mobj);
-			return TEE_ERROR_OUT_OF_MEMORY;
-		}
-
-		thr->rpc_arg = arg;
-		thr->rpc_mobj = mobj;
+		EMSG("rpc_arg not set");
+		return TEE_ERROR_GENERIC;
 	}
 
 	memset(arg, 0, sz);
@@ -1126,8 +1059,8 @@ static uint32_t get_rpc_arg(uint32_t cmd, size_t num_params,
 		}
 	}
 
-	*arg_ret = arg;
-	*carg_ret = mobj_get_cookie(thr->rpc_mobj);
+	if (arg_ret)
+		*arg_ret = arg;
 
 	return TEE_SUCCESS;
 }
@@ -1163,32 +1096,316 @@ uint32_t thread_rpc_cmd(uint32_t cmd, size_t num_params,
 			.w4 = OPTEE_FFA_YIELDING_CALL_RETURN_RPC_CMD,
 		},
 	};
-	uint64_t carg = 0;
 	struct optee_msg_arg *arg = NULL;
 	uint32_t ret = 0;
 
-	ret = get_rpc_arg(cmd, num_params, params, &arg, &carg);
+	ret = get_rpc_arg(cmd, num_params, params, &arg);
 	if (ret)
 		return ret;
 
-	reg_pair_from_64(carg, &rpc_arg.call.w6, &rpc_arg.call.w5);
 	thread_rpc(&rpc_arg);
 
 	return get_rpc_arg_res(arg, num_params, params);
 }
 
-struct mobj *thread_rpc_alloc_global_payload(size_t size __unused)
+static void thread_rpc_free(unsigned int bt, uint64_t cookie, struct mobj *mobj)
 {
-	return NULL;
+	struct thread_rpc_arg rpc_arg = { .call = {
+			.w1 = thread_get_tsd()->rpc_target_info,
+			.w4 = OPTEE_FFA_YIELDING_CALL_RETURN_RPC_CMD,
+		},
+	};
+	struct thread_param param = THREAD_PARAM_VALUE(IN, bt, cookie, 0);
+	uint32_t res2 = 0;
+	uint32_t res = 0;
+
+	DMSG("freeing cookie %#"PRIx64, cookie);
+
+	res = get_rpc_arg(OPTEE_RPC_CMD_SHM_FREE, 1, &param, NULL);
+
+	mobj_put(mobj);
+	res2 = mobj_ffa_unregister_by_cookie(cookie);
+	if (res2)
+		DMSG("mobj_ffa_unregister_by_cookie(%#"PRIx64"): %#"PRIx32,
+		     cookie, res2);
+	if (!res)
+		thread_rpc(&rpc_arg);
 }
 
-void thread_rpc_free_global_payload(struct mobj *mobj __unused)
+static struct mobj *thread_rpc_alloc(size_t size, size_t align, unsigned int bt)
 {
+	struct thread_rpc_arg rpc_arg = { .call = {
+			.w1 = thread_get_tsd()->rpc_target_info,
+			.w4 = OPTEE_FFA_YIELDING_CALL_RETURN_RPC_CMD,
+		},
+	};
+	struct thread_param param = THREAD_PARAM_VALUE(IN, bt, size, align);
+	struct optee_msg_arg *arg = NULL;
+	unsigned int internal_offset = 0;
+	struct mobj *mobj = NULL;
+	uint64_t cookie = 0;
+
+	if (get_rpc_arg(OPTEE_RPC_CMD_SHM_ALLOC, 1, &param, &arg))
+		return NULL;
+
+	thread_rpc(&rpc_arg);
+
+	if (arg->num_params != 1 ||
+	    arg->params->attr != OPTEE_MSG_ATTR_TYPE_FMEM_OUTPUT)
+		return NULL;
+
+	internal_offset = arg->params->u.fmem.internal_offs;
+	cookie = arg->params->u.fmem.global_id;
+	mobj = mobj_ffa_get_by_cookie(cookie, internal_offset);
+	if (!mobj) {
+		DMSG("mobj_ffa_get_by_cookie(%#"PRIx64", %#x): failed",
+		     cookie, internal_offset);
+		return NULL;
+	}
+
+	assert(mobj_is_nonsec(mobj));
+
+	if (mobj_inc_map(mobj)) {
+		DMSG("mobj_inc_map(%#"PRIx64"): failed", cookie);
+		mobj_put(mobj);
+		return NULL;
+	}
+
+	return mobj;
+}
+
+struct mobj *thread_rpc_alloc_payload(size_t size)
+{
+	return thread_rpc_alloc(size, 8, OPTEE_RPC_SHM_TYPE_APPL);
+}
+
+struct mobj *thread_rpc_alloc_kernel_payload(size_t size)
+{
+	return thread_rpc_alloc(size, 8, OPTEE_RPC_SHM_TYPE_KERNEL);
+}
+
+void thread_rpc_free_kernel_payload(struct mobj *mobj)
+{
+	thread_rpc_free(OPTEE_RPC_SHM_TYPE_KERNEL, mobj_get_cookie(mobj), mobj);
+}
+
+void thread_rpc_free_payload(struct mobj *mobj)
+{
+	thread_rpc_free(OPTEE_RPC_SHM_TYPE_APPL, mobj_get_cookie(mobj),
+			mobj);
+}
+
+struct mobj *thread_rpc_alloc_global_payload(size_t size)
+{
+	return thread_rpc_alloc(size, 8, OPTEE_RPC_SHM_TYPE_GLOBAL);
+}
+
+void thread_rpc_free_global_payload(struct mobj *mobj)
+{
+	thread_rpc_free(OPTEE_RPC_SHM_TYPE_GLOBAL, mobj_get_cookie(mobj),
+			mobj);
+}
+
+#ifdef CFG_CORE_SEL2_SPMC
+static bool is_ffa_success(uint32_t fid)
+{
+#ifdef ARM64
+	if (fid == FFA_SUCCESS_64)
+		return true;
+#endif
+	return fid == FFA_SUCCESS_32;
+}
+
+static void spmc_rxtx_map(struct ffa_rxtx *rxtx)
+{
+	struct thread_smc_args args = {
+#ifdef ARM64
+		.a0 = FFA_RXTX_MAP_64,
+#else
+		.a0 = FFA_RXTX_MAP_32,
+#endif
+		.a1 = (vaddr_t)rxtx->tx,
+		.a2 = (vaddr_t)rxtx->rx,
+		.a3 = 1,
+	};
+
+	thread_smccc(&args);
+	if (!is_ffa_success(args.a0)) {
+		if (args.a0 == FFA_ERROR)
+			EMSG("rxtx map failed with error %ld", args.a2);
+		else
+			EMSG("rxtx map failed");
+		panic();
+	}
+}
+
+static uint16_t spmc_get_id(void)
+{
+	struct thread_smc_args args = {
+		.a0 = FFA_ID_GET,
+	};
+
+	thread_smccc(&args);
+	if (!is_ffa_success(args.a0)) {
+		if (args.a0 == FFA_ERROR)
+			EMSG("Get id failed with error %ld", args.a2);
+		else
+			EMSG("Get id failed");
+		panic();
+	}
+
+	return args.a2;
+}
+
+static struct ffa_mem_transaction *spmc_retrieve_req(uint64_t cookie)
+{
+	struct ffa_mem_transaction *trans_descr = nw_rxtx.tx;
+	struct ffa_mem_access *acc_descr_array = NULL;
+	struct ffa_mem_access_perm *perm_descr = NULL;
+	size_t size = sizeof(*trans_descr) +
+		      1 * sizeof(struct ffa_mem_access);
+	struct thread_smc_args args = {
+		.a0 = FFA_MEM_RETRIEVE_REQ_32,
+		.a1 =   size,	/* Total Length */
+		.a2 =	size,	/* Frag Length == Total length */
+		.a3 =	0,	/* Address, Using TX -> MBZ */
+		.a4 =   0,	/* Using TX -> MBZ */
+	};
+
+	memset(trans_descr, 0, size);
+	trans_descr->sender_id = thread_get_tsd()->rpc_target_info;
+	trans_descr->mem_reg_attr = FFA_NORMAL_MEM_REG_ATTR;
+	trans_descr->global_handle = cookie;
+	trans_descr->flags = FFA_MEMORY_REGION_FLAG_TIME_SLICE |
+			     FFA_MEMORY_REGION_TRANSACTION_TYPE_SHARE |
+			     FFA_MEMORY_REGION_FLAG_ANY_ALIGNMENT;
+	trans_descr->mem_access_count = 1;
+	acc_descr_array = trans_descr->mem_access_array;
+	acc_descr_array->region_offs = 0;
+	acc_descr_array->reserved = 0;
+	perm_descr = &acc_descr_array->access_perm;
+	perm_descr->endpoint_id = my_endpoint_id;
+	perm_descr->perm = FFA_MEM_ACC_RW;
+	perm_descr->flags = FFA_MEMORY_REGION_FLAG_TIME_SLICE;
+
+	thread_smccc(&args);
+	if (args.a0 != FFA_MEM_RETRIEVE_RESP) {
+		if (args.a0 == FFA_ERROR)
+			EMSG("Failed to fetch cookie %#"PRIx64" error code %d",
+			     cookie, (int)args.a2);
+		else
+			EMSG("Failed to fetch cookie %#"PRIx64" a0 %#"PRIx64,
+			     cookie, args.a0);
+		return NULL;
+	}
+
+	return nw_rxtx.rx;
+}
+
+void thread_spmc_relinquish(uint64_t cookie)
+{
+	struct ffa_mem_relinquish *relinquish_desc = nw_rxtx.tx;
+	struct thread_smc_args args = {
+		.a0 = FFA_MEM_RELINQUISH,
+	};
+
+	memset(relinquish_desc, 0, sizeof(*relinquish_desc));
+	relinquish_desc->handle = cookie;
+	relinquish_desc->flags = 0;
+	relinquish_desc->endpoint_count = 1;
+	relinquish_desc->endpoint_id_array[0] = my_endpoint_id;
+	thread_smccc(&args);
+	if (!is_ffa_success(args.a0))
+		EMSG("Failed to relinquish cookie %#"PRIx64, cookie);
+}
+
+static int set_pages(struct ffa_address_range *regions,
+		     unsigned int num_regions, unsigned int num_pages,
+		     struct mobj_ffa *mf)
+{
+	unsigned int n = 0;
+	unsigned int idx = 0;
+
+	for (n = 0; n < num_regions; n++) {
+		unsigned int page_count = READ_ONCE(regions[n].page_count);
+		uint64_t addr = READ_ONCE(regions[n].address);
+
+		if (mobj_ffa_add_pages_at(mf, &idx, addr, page_count))
+			return FFA_INVALID_PARAMETERS;
+	}
+
+	if (idx != num_pages)
+		return FFA_INVALID_PARAMETERS;
+
+	return 0;
+}
+
+struct mobj_ffa *thread_spmc_populate_mobj_from_rx(uint64_t cookie)
+{
+	struct mobj_ffa *ret = NULL;
+	struct ffa_mem_transaction *retrieve_desc = NULL;
+	struct ffa_mem_access *descr_array = NULL;
+	struct ffa_mem_region *descr = NULL;
+	struct mobj_ffa *mf = NULL;
+	unsigned int num_pages = 0;
+	unsigned int offs = 0;
+	struct thread_smc_args ffa_rx_release_args = {
+		.a0 = FFA_RX_RELEASE
+	};
+
 	/*
-	 * "can't happen" since thread_rpc_alloc_global_payload() always
-	 * returns NULL.
+	 * OP-TEE is only supporting a single mem_region while the
+	 * specification allows for more than one.
 	 */
-	volatile bool cant_happen __maybe_unused = true;
+	retrieve_desc = spmc_retrieve_req(cookie);
+	if (!retrieve_desc) {
+		EMSG("Failed to retrieve cookie from rx buffer %#"PRIx64,
+		     cookie);
+		return NULL;
+	}
 
-	assert(!cant_happen);
+	descr_array = retrieve_desc->mem_access_array;
+	offs = READ_ONCE(descr_array->region_offs);
+	descr = (struct ffa_mem_region *)((vaddr_t)retrieve_desc + offs);
+
+	num_pages = READ_ONCE(descr->total_page_count);
+	mf = mobj_ffa_sel2_spmc_new(cookie, num_pages);
+	if (!mf)
+		goto out;
+
+	if (set_pages(descr->address_range_array,
+		      READ_ONCE(descr->address_range_count), num_pages, mf)) {
+		mobj_ffa_sel2_spmc_delete(mf);
+		goto out;
+	}
+
+	ret = mf;
+
+out:
+	/* Release RX buffer after the mem retrieve request. */
+	thread_smccc(&ffa_rx_release_args);
+
+	return ret;
 }
+
+static TEE_Result spmc_init(void)
+{
+	spmc_rxtx_map(&nw_rxtx);
+	my_endpoint_id = spmc_get_id();
+	DMSG("My endpoint ID %#x", my_endpoint_id);
+
+	return TEE_SUCCESS;
+}
+#endif /*CFG_CORE_SEL2_SPMC*/
+
+#if defined(CFG_CORE_SEL1_SPMC)
+static TEE_Result spmc_init(void)
+{
+	my_endpoint_id = SPMC_ENDPOINT_ID;
+	DMSG("My endpoint ID %#x", my_endpoint_id);
+
+	return TEE_SUCCESS;
+}
+#endif /*CFG_CORE_SEL1_SPMC*/
+
+service_init(spmc_init);

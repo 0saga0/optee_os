@@ -655,7 +655,7 @@ static void op_attr_secret_value_clear(void *attr)
 	struct tee_cryp_obj_secret *key = attr;
 
 	key->key_size = 0;
-	memset(key + 1, 0, key->alloc_size);
+	memzero_explicit(key + 1, key->alloc_size);
 }
 
 static TEE_Result op_attr_bignum_from_user(void *attr, const void *buffer,
@@ -1739,7 +1739,7 @@ static TEE_Result check_pub_rsa_key(struct bignum *e)
 
 	crypto_bignum_bn2bin(e, bin_key);
 
-	if (!(bin_key[0] & 1)) /* key must be odd */
+	if (!(bin_key[n - 1] & 1)) /* key must be odd */
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (n == 3) {

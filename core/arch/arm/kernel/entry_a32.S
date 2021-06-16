@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2014, Linaro Limited
+ * Copyright (c) 2021, Arm Limited
  */
 
 #include <arm32_macros.S>
@@ -65,11 +66,10 @@ END_FUNC __assert_flat_mapped_range
 	.endm
 #endif /* CFG_PL310 */
 
-FUNC plat_cpu_reset_early , :
+WEAK_FUNC plat_cpu_reset_early , :
 	bx	lr
 END_FUNC plat_cpu_reset_early
 DECLARE_KEEP_PAGER plat_cpu_reset_early
-.weak plat_cpu_reset_early
 
 	.section .identity_map, "ax"
 	.align 5
@@ -161,6 +161,24 @@ END_FUNC reset_vect_table
 		write_sctlr r0
 	.endm
 
+#if defined(CFG_CORE_SEL1_SPMC) && defined(CFG_WITH_ARM_TRUSTED_FW)
+	/*
+	 * With OP-TEE as SPMC at S-EL1 the SPMD (SPD_spmd) in TF-A passes
+	 * the DTB in r0, pagable part in r1, and the rest of the registers
+	 * are unused
+	 *
+	 * Save boot arguments passed
+	 * entry r0, saved r6: device tree address
+	 * entry r1, saved r4: pagestore
+	 * saved r5, r7: Zero
+	 */
+	.macro bootargs_entry
+	mov	r6, r0
+	mov	r4, r1
+	mov	r5, #0
+	mov	r7, #0
+	.endm
+#else
 	/*
 	 * Save boot arguments
 	 * entry r0, saved r4: pagestore
@@ -186,6 +204,7 @@ END_FUNC reset_vect_table
 #endif
 	mov	r7, r1
 	.endm
+#endif
 
 	.macro maybe_init_spectre_workaround
 #if !defined(CFG_WITH_ARM_TRUSTED_FW) && \
@@ -516,6 +535,14 @@ shadow_stack_access_ok:
 	bl	console_init
 #endif
 
+#ifdef CFG_VIRTUALIZATION
+	/*
+	 * Initialize partition tables for each partition to
+	 * default_partition which has been relocated now to a different VA
+	 */
+	bl	core_mmu_set_default_prtn_tbl
+#endif
+
 	mov	r0, r4		/* pageable part address */
 	mov	r1, r5		/* ns-entry address */
 	bl	boot_init_primary_early
@@ -571,7 +598,7 @@ shadow_stack_access_ok:
 	 */
 	ldr	r1, boot_mmu_config + CORE_MMU_CONFIG_LOAD_OFFSET
 	sub	r0, r0, r1
-	bl	ffa_secondary_cpu_boot_req
+	bl	ffa_secondary_cpu_ep_register
 	b	thread_ffa_msg_wait
 #else /* CFG_CORE_FFA */
 

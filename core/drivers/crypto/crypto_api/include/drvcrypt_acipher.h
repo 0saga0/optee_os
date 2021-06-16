@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * Copyright 2018-2020 NXP
+ * Copyright 2018-2021 NXP
  *
  * Brief   Asymmetric Cipher interface calling the HW crypto driver.
  */
@@ -161,6 +161,60 @@ struct drvcrypt_ecc {
 static inline TEE_Result drvcrypt_register_ecc(struct drvcrypt_ecc *ops)
 {
 	return drvcrypt_register(CRYPTO_ECC, (void *)ops);
+}
+
+/*
+ * Crypto Library DH driver operations
+ */
+struct drvcrypt_dh {
+	/* Allocates the DH keypair */
+	TEE_Result (*alloc_keypair)(struct dh_keypair *key, size_t size_bits);
+	/* Generates the DH keypair */
+	TEE_Result (*gen_keypair)(struct dh_keypair *key, struct bignum *q,
+				  size_t size_bits);
+	/* DH Shared Secret */
+	TEE_Result (*shared_secret)(struct drvcrypt_secret_data *sdata);
+};
+
+/*
+ * Register a DH processing driver in the crypto API
+ *
+ * @ops - Driver operations in the HW layer
+ */
+static inline TEE_Result drvcrypt_register_dh(struct drvcrypt_dh *ops)
+{
+	return drvcrypt_register(CRYPTO_DH, (void *)ops);
+}
+
+/*
+ * Crypto Library DSA driver operations
+ */
+struct drvcrypt_dsa {
+	/* Allocates the DSA keypair */
+	TEE_Result (*alloc_keypair)(struct dsa_keypair *key, size_t l_bits,
+				    size_t n_bits);
+	/* Allocates the DSA public key */
+	TEE_Result (*alloc_publickey)(struct dsa_public_key *key, size_t l_bits,
+				      size_t n_bits);
+	/* Generates the DSA keypair */
+	TEE_Result (*gen_keypair)(struct dsa_keypair *key, size_t l_bits,
+				  size_t n_bits);
+	/* DSA Sign a message and returns the signature */
+	TEE_Result (*sign)(struct drvcrypt_sign_data *sdata, size_t l_bytes,
+			   size_t n_bytes);
+	/* DSA Verify a message's signature */
+	TEE_Result (*verify)(struct drvcrypt_sign_data *sdata, size_t l_bytes,
+			     size_t n_bytes);
+};
+
+/*
+ * Register a DSA processing driver in the crypto API
+ *
+ * @ops - Driver operations in the HW layer
+ */
+static inline TEE_Result drvcrypt_register_dsa(struct drvcrypt_dsa *ops)
+{
+	return drvcrypt_register(CRYPTO_DSA, (void *)ops);
 }
 
 #endif /* __DRVCRYPT_ACIPHER_H__ */

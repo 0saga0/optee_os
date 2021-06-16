@@ -186,6 +186,35 @@ ffa_handle_sp_error(struct thread_smc_args *args,
 	return dst;
 }
 
+static void handle_features(struct thread_smc_args *args)
+{
+	uint32_t ret_fid = 0;
+	uint32_t ret_w2 = FFA_PARAM_MBZ;
+
+	switch (args->a1) {
+#ifdef ARM64
+	case FFA_RXTX_MAP_64:
+#endif
+	case FFA_RXTX_MAP_32:
+		ret_fid = FFA_SUCCESS_32;
+		ret_w2 = 0; /* 4kB Minimum buffer size and alignment boundary */
+		break;
+	case FFA_ERROR:
+	case FFA_VERSION:
+	case FFA_SUCCESS_32:
+#ifdef ARM64
+	case FFA_SUCCESS_64:
+#endif
+	default:
+		ret_fid = FFA_ERROR;
+		ret_w2 = FFA_NOT_SUPPORTED;
+		break;
+	}
+
+	spmc_set_args(args, ret_fid, FFA_PARAM_MBZ, ret_w2, FFA_PARAM_MBZ,
+		      FFA_PARAM_MBZ, FFA_PARAM_MBZ);
+}
+
 /*
  * FF-A messages handler for SP. Every messages for or from a SP is handled
  * here. This is the entry of the sp_spmc kernel thread. The caller_sp is set
@@ -213,10 +242,45 @@ void spmc_sp_msg_handler(struct thread_smc_args *args,
 			cpu_spin_unlock(&caller_sp->spinlock);
 			caller_sp = NULL;
 			break;
+#ifdef ARM64
+		case FFA_RXTX_MAP_64:
+#endif
+		case FFA_RXTX_MAP_32:
+			ts_push_current_session(&caller_sp->ts_sess);
+			spmc_handle_rxtx_map(args, &caller_sp->rxtx);
+			ts_pop_current_session();
+			sp_enter(args, caller_sp);
+			break;
+		case FFA_RXTX_UNMAP:
+			ts_push_current_session(&caller_sp->ts_sess);
+			spmc_handle_rxtx_unmap(args, &caller_sp->rxtx);
+			ts_pop_current_session();
+			sp_enter(args, caller_sp);
+			break;
+		case FFA_RX_RELEASE:
+			ts_push_current_session(&caller_sp->ts_sess);
+			spmc_handle_rx_release(args, &caller_sp->rxtx);
+			ts_pop_current_session();
+			sp_enter(args, caller_sp);
+			break;
+		case FFA_ID_GET:
+			args->a0 = FFA_SUCCESS_32;
+			args->a2 = caller_sp->endpoint_id;
+			sp_enter(args, caller_sp);
+			break;
+		case FFA_VERSION:
+			spmc_handle_version(args);
+			sp_enter(args, caller_sp);
+			break;
+		case FFA_FEATURES:
+			handle_features(args);
+			sp_enter(args, caller_sp);
+			break;
 		default:
 			EMSG("Unhandled FFA function ID %#"PRIx32,
 			     (uint32_t)args->a0);
 			ffa_set_error(args, FFA_INVALID_PARAMETERS);
+			sp_enter(args, caller_sp);
 		}
 	} while (caller_sp);
 }

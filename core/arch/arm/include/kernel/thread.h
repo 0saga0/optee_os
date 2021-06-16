@@ -20,7 +20,7 @@
 #define THREAD_ID_0		0
 #define THREAD_ID_INVALID	-1
 
-#define THREAD_RPC_MAX_NUM_PARAMS	4
+#define THREAD_RPC_MAX_NUM_PARAMS	U(4)
 
 #ifndef __ASSEMBLER__
 
@@ -721,6 +721,7 @@ uint32_t thread_rpc_cmd(uint32_t cmd, size_t num_params,
 
 unsigned long thread_smc(unsigned long func_id, unsigned long a1,
 			 unsigned long a2, unsigned long a3);
+void thread_smccc(struct thread_smc_args *arg_res);
 
 /**
  * Allocate data for payload buffers.
@@ -775,6 +776,12 @@ enum thread_shm_cache_user {
 void *thread_rpc_shm_cache_alloc(enum thread_shm_cache_user user,
 				 enum thread_shm_type shm_type,
 				 size_t size, struct mobj **mobj);
+
+#if defined(CFG_CORE_SEL2_SPMC)
+struct mobj_ffa *thread_spmc_populate_mobj_from_rx(uint64_t cookie);
+void thread_spmc_relinquish(uint64_t memory_region_handle);
+#endif
+
 #endif /*__ASSEMBLER__*/
 
 #endif /*KERNEL_THREAD_H*/

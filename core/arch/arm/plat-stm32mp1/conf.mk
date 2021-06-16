@@ -35,12 +35,6 @@ $(call force,CFG_BOOT_SECONDARY_REQUEST,y)
 $(call force,CFG_GIC,y)
 $(call force,CFG_INIT_CNTVOFF,y)
 $(call force,CFG_PSCI_ARM32,y)
-$(call force,CFG_SCMI_MSG_DRIVERS,y)
-$(call force,CFG_SCMI_MSG_CLOCK,y)
-$(call force,CFG_SCMI_MSG_RESET_DOMAIN,y)
-$(call force,CFG_SCMI_MSG_SMT,y)
-$(call force,CFG_SCMI_MSG_SMT_FASTCALL_ENTRY,y)
-$(call force,CFG_SCMI_MSG_VOLTAGE_DOMAIN,y)
 $(call force,CFG_SECONDARY_INIT_CNTFRQ,y)
 $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
 $(call force,CFG_SM_PLATFORM_HANDLER,y)
@@ -92,16 +86,39 @@ CFG_STM32MP_PANIC_ON_TZC_PERM_VIOLATION ?= y
 
 # SiP/OEM service for non-secure world
 CFG_STM32_BSEC_SIP ?= y
+CFG_STM32MP1_SCMI_SIP ?= y
+ifeq ($(CFG_STM32MP1_SCMI_SIP),y)
+$(call force,CFG_SCMI_MSG_DRIVERS,y,Mandated by CFG_STM32MP1_SCMI_SIP)
+$(call force,CFG_SCMI_MSG_SMT_FASTCALL_ENTRY,y,Mandated by CFG_STM32MP1_SCMI_SIP)
+endif
+
+# Default enable SCMI PTA support
+CFG_SCMI_PTA ?= y
+ifeq ($(CFG_SCMI_PTA),y)
+$(call force,CFG_SCMI_MSG_DRIVERS,y,Mandated by CFG_SCMI_PTA)
+$(call force,CFG_SCMI_MSG_SMT_THREAD_ENTRY,y,Mandated by CFG_SCMI_PTA)
+endif
+
+CFG_SCMI_MSG_DRIVERS ?= n
+ifeq ($(CFG_SCMI_MSG_DRIVERS),y)
+$(call force,CFG_SCMI_MSG_CLOCK,y)
+$(call force,CFG_SCMI_MSG_RESET_DOMAIN,y)
+$(call force,CFG_SCMI_MSG_SMT,y)
+$(call force,CFG_SCMI_MSG_VOLTAGE_DOMAIN,y)
+endif
 
 # Default enable some test facitilites
 CFG_TEE_CORE_EMBED_INTERNAL_TESTS ?= y
 CFG_WITH_STATS ?= y
 
 # Default disable some support for pager memory size constraint
+ifeq ($(CFG_WITH_PAGER),y)
 CFG_TEE_CORE_DEBUG ?= n
 CFG_UNWIND ?= n
 CFG_LOCKDEP ?= n
 CFG_CORE_ASLR ?= n
+CFG_TA_BGET_TEST ?= n
+endif
 
 # Non-secure UART and GPIO/pinctrl for the output console
 CFG_WITH_NSEC_GPIOS ?= y

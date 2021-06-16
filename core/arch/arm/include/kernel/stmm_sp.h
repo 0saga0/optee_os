@@ -21,12 +21,12 @@
 #define STMM_RET_DENIED		        -3
 #define STMM_RET_NO_MEM		        -5
 
-#define STMM_MEM_ATTR_ACCESS_MASK	0x3
-#define STMM_MEM_ATTR_ACCESS_NONE	0
-#define STMM_MEM_ATTR_ACCESS_RW		1
-#define STMM_MEM_ATTR_ACCESS_RO		3
+#define STMM_MEM_ATTR_ACCESS_MASK	U(0x3)
+#define STMM_MEM_ATTR_ACCESS_NONE	U(0)
+#define STMM_MEM_ATTR_ACCESS_RW		U(1)
+#define STMM_MEM_ATTR_ACCESS_RO		U(3)
 #define STMM_MEM_ATTR_EXEC_NEVER	BIT(2)
-#define STMM_MEM_ATTR_EXEC		0
+#define STMM_MEM_ATTR_EXEC		U(0)
 #define STMM_MEM_ATTR_ALL		(STMM_MEM_ATTR_ACCESS_RW | \
 					 STMM_MEM_ATTR_ACCESS_RO | \
 					 STMM_MEM_ATTR_EXEC_NEVER)
@@ -140,12 +140,12 @@ struct stmm_ctx {
 	bool is_initializing;
 };
 
-extern const struct ts_ops stmm_sp_ops;
+extern const struct ts_ops *stmm_sp_ops_ptr;
 
 static inline bool is_stmm_ctx(struct ts_ctx *ctx __maybe_unused)
 {
-	return IS_ENABLED(CFG_WITH_STMM_SP) &&
-	       ctx && ctx->ops == &stmm_sp_ops;
+	return IS_ENABLED(CFG_WITH_STMM_SP) && stmm_sp_ops_ptr &&
+	       ctx && ctx->ops == stmm_sp_ops_ptr;
 }
 
 static inline struct stmm_ctx *to_stmm_ctx(struct ts_ctx *ctx)

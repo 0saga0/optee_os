@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
  * Copyright (c) 2015, Linaro Limited
+ * Copyright (c) 2021, Arm Limited
  */
 
 #include <platform_config.h>
@@ -55,11 +56,21 @@
 	.endm
 
 FUNC _start , :
+#if defined(CFG_CORE_SEL1_SPMC)
+	/*
+	 * With OP-TEE as SPMC at S-EL1 the SPMD (SPD_spmd) in TF-A passes
+	 * the DTB in x0, pagaeble part in x1 and the rest of the registers
+	 * are unused
+	 */
+	mov	x19, x1		/* Save pagable part */
+	mov	x20, x0		/* Save DT address */
+#else
 	mov	x19, x0		/* Save pagable part address */
 #if defined(CFG_DT_ADDR)
 	ldr     x20, =CFG_DT_ADDR
 #else
 	mov	x20, x2		/* Save DT address */
+#endif
 #endif
 
 	adr	x0, reset_vect_table
@@ -206,6 +217,14 @@ clear_nex_bss:
 	bl	console_init
 #endif
 
+#ifdef CFG_VIRTUALIZATION
+	/*
+	 * Initialize partition tables for each partition to
+	 * default_partition which has been relocated now to a different VA
+	 */
+	bl	core_mmu_set_default_prtn_tbl
+#endif
+
 	mov	x0, x19		/* pagable part address */
 	mov	x1, #-1
 	bl	boot_init_primary_early
@@ -249,7 +268,7 @@ clear_nex_bss:
 	 */
 	ldr	x1, boot_mmu_config + CORE_MMU_CONFIG_LOAD_OFFSET
 	sub	x0, x0, x1
-	bl	ffa_secondary_cpu_boot_req
+	bl	ffa_secondary_cpu_ep_register
 	b	thread_ffa_msg_wait
 #else
 	/*

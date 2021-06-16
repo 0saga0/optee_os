@@ -122,7 +122,7 @@ endif
 # with limited depth not including any tag, so there is really no guarantee
 # that TEE_IMPL_VERSION contains the major and minor revision numbers.
 CFG_OPTEE_REVISION_MAJOR ?= 3
-CFG_OPTEE_REVISION_MINOR ?= 12
+CFG_OPTEE_REVISION_MINOR ?= 13
 
 # Trusted OS implementation manufacturer name
 CFG_TEE_MANUFACTURER ?= LINARO
@@ -179,6 +179,15 @@ CFG_RPMB_FS_RD_ENTRIES ?= 8
 # CFG_RPMB_FS_RD_ENTRIES*sizeof(struct rpmb_fat_entry) bytes of heap memory
 # in case the cache is too small to hold all elements when traversing.
 CFG_RPMB_FS_CACHE_ENTRIES ?= 0
+
+# Print RPMB data frames sent to and received from the RPMB device
+CFG_RPMB_FS_DEBUG_DATA ?= n
+
+# Clear RPMB content at cold boot
+CFG_RPMB_RESET_FAT ?= n
+
+# Use a hard coded RPMB key instead of deriving it from the platform HUK
+CFG_RPMB_TESTKEY ?= n
 
 # Enables RPMB key programming by the TEE, in case the RPMB partition has not
 # been configured yet.
@@ -324,8 +333,19 @@ ifeq ($(CFG_EMBEDDED_TS),y)
 $(call force,CFG_ZLIB,y)
 endif
 
+# By default the early TAs are compressed in the TEE binary, it is possible to
+# not compress them with CFG_EARLY_TA_COMPRESS=n
+CFG_EARLY_TA_COMPRESS ?= y
+
 # Enable paging, requires SRAM, can't be enabled by default
 CFG_WITH_PAGER ?= n
+
+# Use the pager for user TAs
+CFG_PAGED_USER_TA ?= $(CFG_WITH_PAGER)
+
+# If paging of user TAs, that is, R/W paging default to enable paging of
+# TAG and IV in order to reduce heap usage.
+CFG_CORE_PAGE_TAG_AND_IV ?= $(CFG_PAGED_USER_TA)
 
 # Runtime lock dependency checker: ensures that a proper locking hierarchy is
 # used in the TEE core when acquiring and releasing mutexes. Any violation will
@@ -340,9 +360,6 @@ CFG_LOCKDEP_RECORD_STACK ?= y
 # BestFit algorithm in bget reduces the fragmentation of the heap when running
 # with the pager enabled or lockdep
 CFG_CORE_BGET_BESTFIT ?= $(call cfg-one-enabled, CFG_WITH_PAGER CFG_LOCKDEP)
-
-# Use the pager for user TAs
-CFG_PAGED_USER_TA ?= $(CFG_WITH_PAGER)
 
 # Enable support for detected undefined behavior in C
 # Uses a lot of memory, can't be enabled by default
@@ -620,6 +637,9 @@ CFG_SCMI_MSG_RESET_DOMAIN ?= n
 CFG_SCMI_MSG_SMT ?= n
 CFG_SCMI_MSG_VOLTAGE_DOMAIN ?= n
 
+# Enable SCMI PTA interface for REE SCMI agents
+CFG_SCMI_PTA ?= n
+
 ifneq ($(CFG_STMM_PATH),)
 $(call force,CFG_WITH_STMM_SP,y)
 else
@@ -641,3 +661,15 @@ CFG_COMPAT_GP10_DES ?= y
 
 # Defines a limit for many levels TAs may call each others.
 CFG_CORE_MAX_SYSCALL_RECURSION ?= 4
+
+# Pseudo-TA to export hardware RNG output to Normal World
+# RNG characteristics are platform specific
+CFG_HWRNG_PTA ?= n
+ifeq ($(CFG_HWRNG_PTA),y)
+# Output rate of hw_get_random_bytes() in bytes per second, 0: not rate-limited
+CFG_HWRNG_RATE ?= 0
+# Quality/entropy of hw_get_random_bytes() per 1024 bits of output data, in bits
+ifeq (,$(CFG_HWRNG_QUALITY))
+$(error CFG_HWRNG_QUALITY not defined)
+endif
+endif

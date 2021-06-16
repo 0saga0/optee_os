@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
- * Copyright (c) 2016-2017, Linaro Limited
+ * Copyright (c) 2016-2021, Linaro Limited
  */
 
 #include <assert.h>
@@ -497,8 +497,8 @@ struct mobj *mobj_seccpy_shm_alloc(size_t size)
 
 	m->fobj = fobj_rw_paged_alloc(ROUNDUP(size, SMALL_PAGE_SIZE) /
 				      SMALL_PAGE_SIZE);
-	if (tee_pager_add_um_area(&utc->uctx, va, m->fobj,
-				  TEE_MATTR_PRW | TEE_MATTR_URW))
+	if (tee_pager_add_um_region(&utc->uctx, va, m->fobj,
+				    TEE_MATTR_PRW | TEE_MATTR_URW))
 		goto bad;
 
 	m->va = va;
@@ -597,8 +597,10 @@ static TEE_Result mobj_with_fobj_get_pa(struct mobj *mobj, size_t offs,
 	struct mobj_with_fobj *f = to_mobj_with_fobj(mobj);
 	paddr_t p = 0;
 
-	if (!f->fobj->ops->get_pa)
-		return TEE_ERROR_GENERIC;
+	if (!f->fobj->ops->get_pa) {
+		assert(mobj_is_paged(mobj));
+		return TEE_ERROR_NOT_SUPPORTED;
+	}
 
 	p = f->fobj->ops->get_pa(f->fobj, offs / SMALL_PAGE_SIZE) +
 	    offs % SMALL_PAGE_SIZE;

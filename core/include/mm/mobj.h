@@ -15,6 +15,8 @@
 #include <tee_api_types.h>
 #include <types_ext.h>
 
+#include <optee_msg.h>
+
 struct mobj {
 	const struct mobj_ops *ops;
 	size_t size;
@@ -165,7 +167,11 @@ static inline uint64_t mobj_get_cookie(struct mobj *mobj)
 	if (mobj && mobj->ops && mobj->ops->get_cookie)
 		return mobj->ops->get_cookie(mobj);
 
+#if defined(CFG_CORE_SEL1_SPMC) || defined(CFG_CORE_SEL2_SPMC)
+	return OPTEE_MSG_FMEM_INVALID_GLOBAL_ID;
+#else
 	return 0;
+#endif
 }
 
 static inline struct fobj *mobj_get_fobj(struct mobj *mobj)
@@ -216,6 +222,12 @@ struct mobj_ffa *mobj_ffa_sel1_spmc_new(unsigned int num_pages);
 void mobj_ffa_sel1_spmc_delete(struct mobj_ffa *mobj);
 TEE_Result mobj_ffa_sel1_spmc_reclaim(uint64_t cookie);
 #endif
+#ifdef CFG_CORE_SEL2_SPMC
+struct mobj_ffa *mobj_ffa_sel2_spmc_new(uint64_t cookie,
+					unsigned int num_pages);
+void mobj_ffa_sel2_spmc_delete(struct mobj_ffa *mobj);
+#endif
+
 uint64_t mobj_ffa_get_cookie(struct mobj_ffa *mobj);
 TEE_Result mobj_ffa_add_pages_at(struct mobj_ffa *mobj, unsigned int *idx,
 				 paddr_t pa, unsigned int num_pages);
