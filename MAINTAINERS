@@ -115,7 +115,7 @@ R:	Jerome Forissier <jerome@forissier.org> [@jforissier]
 S:	Maintained
 F:	core/arch/arm/plat-hisilicon
 
-Marvell Armada 70x0, Armada 80x0, Armada 3700
+Marvell Armada 70x0, Armada 80x0, Armada 3700, OcteonTX2 CN96XX, OcteonTX2 CFN95XX, OcteonTX2 CN98XX
 R:	Tao Lu <taolu@marvell.com> [@taovcu]
 R:	[@OP-TEE/plat-ls]
 S:	Maintained
@@ -137,13 +137,13 @@ R:	Sahil Malhotra <sahil.malhotra@nxp.com>
 S:	Maintained
 F:	core/drivers/ls_i2c.c
 
-Core Drivers GPIO
-R:	Manish Tomar <manish.tomar@nxp.com>
+LS Core Drivers GPIO
+R:	Sahil Malhotra <sahil.malhotra@nxp.com>
 S:	Maintained
 F:	core/drivers/ls_gpio.c
 
-Core Drivers DSPI
-R:	Manish Tomar <manish.tomar@nxp.com>
+LS Core Drivers DSPI
+R:	Sahil Malhotra <sahil.malhotra@nxp.com>
 S:	Maintained
 F:	core/drivers/ls_dspi.c
 
@@ -158,6 +158,11 @@ F:	core/arch/arm/plat-imx/
 F:	core/arch/arm/plat-imx/registers
 F:	core/drivers/crypto/caam/
 
+Clock driver framework
+R:	Clement Leger <clement.leger@bootlin.com> [@clementleger]
+S:	Maintained
+F:	core/drivers/clk/
+
 Crypto driver interface
 R:	Cedric Neveux <cedric.neveux@nxp.com> [@cneveux]
 R:	Silvano Di Ninno <silvano.dininno@nxp.com> [@sdininno]
@@ -170,6 +175,13 @@ R:	Peng Fan <peng.fan@nxp.com> [@MrVan]
 R:	Bryan O'Donoghue <bryan.odonoghue@linaro.org> [@bryanodonoghue]
 S:	Maintained
 F:	core/arch/arm/plat-imx/conf.mk
+
+PKCS#11 TA
+R:	Etienne Carriere <etienne.carriere@st.com> [@etienne-lms]
+R:	Ruchika Gupta <ruchika.gupta@linaro.org> [@ruchi393]
+R:	Vesa Jääskeläinen <vesa.jaaskelainen@vaisala.com> [@vesajaaskelainen]
+S:	Maintained
+F:	ta/pkcs11
 
 QEMU (32 and 64 bits)
 R:	Linaro <op-tee@linaro.org> [@OP-TEE/linaro]

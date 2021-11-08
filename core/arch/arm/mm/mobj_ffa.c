@@ -39,7 +39,7 @@ static struct mobj_ffa_head shm_inactive_head =
 
 static unsigned int shm_lock = SPINLOCK_UNLOCK;
 
-static const struct mobj_ops mobj_ffa_ops __rodata_unpaged;
+const struct mobj_ops mobj_ffa_ops;
 
 static struct mobj_ffa *to_mobj_ffa(struct mobj *mobj)
 {
@@ -395,10 +395,25 @@ struct mobj *mobj_ffa_get_by_cookie(uint64_t cookie,
 			assert(refcount_val(&mf->mobj.refc) == 0);
 			refcount_set(&mf->mobj.refc, 1);
 			refcount_set(&mf->mapcount, 0);
+
+			/*
+			 * mf->page_offset is offset into the first page.
+			 * This offset is assigned from the internal_offs
+			 * parameter to this function.
+			 *
+			 * While a mobj_ffa is active (ref_count > 0) this
+			 * will not change, but when being pushed to the
+			 * inactive list it can be changed again.
+			 *
+			 * So below we're backing out the old
+			 * mf->page_offset and then assigning a new from
+			 * internal_offset.
+			 */
 			mf->mobj.size += mf->page_offset;
 			assert(!(mf->mobj.size & SMALL_PAGE_MASK));
 			mf->mobj.size -= internal_offs;
 			mf->page_offset = internal_offs;
+
 			SLIST_INSERT_HEAD(&shm_head, mf, link);
 		}
 	}
@@ -577,7 +592,11 @@ static TEE_Result mapped_shm_init(void)
 	return TEE_SUCCESS;
 }
 
-static const struct mobj_ops mobj_ffa_ops __rodata_unpaged = {
+/*
+ * Note: this variable is weak just to ease breaking its dependency chain
+ * when added to the unpaged area.
+ */
+const struct mobj_ops mobj_ffa_ops __weak __rodata_unpaged("mobj_ffa_ops") = {
 	.get_pa = ffa_get_pa,
 	.get_phys_offs = ffa_get_phys_offs,
 	.get_va = ffa_get_va,
@@ -589,4 +608,4 @@ static const struct mobj_ops mobj_ffa_ops __rodata_unpaged = {
 	.dec_map = ffa_dec_map,
 };
 
-service_init(mapped_shm_init);
+preinit(mapped_shm_init);

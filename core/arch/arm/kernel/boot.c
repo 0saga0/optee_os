@@ -75,7 +75,7 @@ DECLARE_KEEP_PAGER(sem_cpu_sync);
 #ifdef CFG_DT
 struct dt_descriptor {
 	void *blob;
-#ifdef CFG_EXTERNAL_DTB_OVERLAY
+#ifdef _CFG_USE_DTB_OVERLAY
 	int frag_id;
 #endif
 };
@@ -416,8 +416,9 @@ static void init_runtime(unsigned long pageable_part)
 
 	init_asan();
 
-	malloc_add_pool(__heap1_start, __heap1_end - __heap1_start);
+	/* Add heap2 first as heap1 may be too small as initial bget pool */
 	malloc_add_pool(__heap2_start, __heap2_end - __heap2_start);
+	malloc_add_pool(__heap1_start, __heap1_end - __heap1_start);
 
 	/*
 	 * This needs to be initialized early to support address lookup
@@ -441,7 +442,8 @@ static void init_runtime(unsigned long pageable_part)
 
 	mm = tee_mm_alloc(&tee_mm_sec_ddr, pageable_size);
 	assert(mm);
-	paged_store = phys_to_virt(tee_mm_get_smem(mm), MEM_AREA_TA_RAM);
+	paged_store = phys_to_virt(tee_mm_get_smem(mm), MEM_AREA_TA_RAM,
+				   pageable_size);
 	/*
 	 * Load pageable part in the dedicated allocated area:
 	 * - Move pageable non-init part into pageable area. Note bootloader
@@ -450,7 +452,8 @@ static void init_runtime(unsigned long pageable_part)
 	 */
 	memmove(paged_store + init_size,
 		phys_to_virt(pageable_part,
-			     core_mmu_get_type_by_pa(pageable_part)),
+			     core_mmu_get_type_by_pa(pageable_part),
+			     __pageable_part_end - __pageable_part_start),
 		__pageable_part_end - __pageable_part_start);
 	asan_memcpy_unchecked(paged_store, __init_start, init_size);
 	/*
@@ -630,7 +633,7 @@ static TEE_Result release_external_dt(void)
 }
 boot_final(release_external_dt);
 
-#ifdef CFG_EXTERNAL_DTB_OVERLAY
+#ifdef _CFG_USE_DTB_OVERLAY
 static int add_dt_overlay_fragment(struct dt_descriptor *dt, int ioffs)
 {
 	char frag[32];
@@ -654,20 +657,16 @@ static int add_dt_overlay_fragment(struct dt_descriptor *dt, int ioffs)
 static int init_dt_overlay(struct dt_descriptor *dt, int __maybe_unused dt_size)
 {
 	int fragment;
-	int ret;
 
-	ret = fdt_check_header(dt->blob);
-	if (!ret) {
-		fdt_for_each_subnode(fragment, dt->blob, 0)
-			dt->frag_id += 1;
-		return ret;
+	if (IS_ENABLED(CFG_EXTERNAL_DTB_OVERLAY)) {
+		if (!fdt_check_header(dt->blob)) {
+			fdt_for_each_subnode(fragment, dt->blob, 0)
+				dt->frag_id += 1;
+			return 0;
+		}
 	}
 
-#ifdef CFG_DT_ADDR
 	return fdt_create_empty_tree(dt->blob, dt_size);
-#else
-	return -1;
-#endif
 }
 #else
 static int add_dt_overlay_fragment(struct dt_descriptor *dt __unused, int offs)
@@ -680,7 +679,7 @@ static int init_dt_overlay(struct dt_descriptor *dt __unused,
 {
 	return 0;
 }
-#endif /* CFG_EXTERNAL_DTB_OVERLAY */
+#endif /* _CFG_USE_DTB_OVERLAY */
 
 static int add_dt_path_subnode(struct dt_descriptor *dt, const char *path,
 			       const char *subnode)
@@ -856,7 +855,7 @@ static int add_res_mem_dt_node(struct dt_descriptor *dt, const char *name,
 		offs = 0;
 	}
 
-	if (IS_ENABLED(CFG_EXTERNAL_DTB_OVERLAY)) {
+	if (IS_ENABLED(_CFG_USE_DTB_OVERLAY)) {
 		len_size = sizeof(paddr_t) / sizeof(uint32_t);
 		addr_size = sizeof(paddr_t) / sizeof(uint32_t);
 	} else {
@@ -885,9 +884,9 @@ static int add_res_mem_dt_node(struct dt_descriptor *dt, const char *name,
 	}
 
 	ret = snprintf(subnode_name, sizeof(subnode_name),
-		       "%s@0x%" PRIxPA, name, pa);
+		       "%s@%" PRIxPA, name, pa);
 	if (ret < 0 || ret >= (int)sizeof(subnode_name))
-		DMSG("truncated node \"%s@0x%"PRIxPA"\"", name, pa);
+		DMSG("truncated node \"%s@%" PRIxPA"\"", name, pa);
 	offs = fdt_add_subnode(dt->blob, offs, subnode_name);
 	if (offs >= 0) {
 		uint32_t data[FDT_MAX_NCELLS * 2];
@@ -1176,17 +1175,29 @@ static void discover_nsec_memory(void)
 }
 #endif /*!CFG_CORE_DYN_SHM*/
 
-void init_tee_runtime(void)
-{
 #ifdef CFG_VIRTUALIZATION
+static TEE_Result virt_init_heap(void)
+{
 	/* We need to initialize pool for every virtual guest partition */
 	malloc_add_pool(__heap1_start, __heap1_end - __heap1_start);
+
+	return TEE_SUCCESS;
+}
+preinit_early(virt_init_heap);
 #endif
 
+void init_tee_runtime(void)
+{
 #ifndef CFG_WITH_PAGER
 	/* Pager initializes TA RAM early */
 	core_mmu_init_ta_ram();
 #endif
+	/*
+	 * With virtualization we call this function when creating the
+	 * OP-TEE partition instead.
+	 */
+	if (!IS_ENABLED(CFG_VIRTUALIZATION))
+		call_preinitcalls();
 	call_initcalls();
 }
 
@@ -1248,13 +1259,12 @@ void __weak boot_init_primary_late(unsigned long fdt)
 
 	main_init_gic();
 	init_vfp_nsec();
-#ifndef CFG_VIRTUALIZATION
-	init_tee_runtime();
-#endif
-#ifdef CFG_VIRTUALIZATION
-	IMSG("Initializing virtualization support");
-	core_mmu_init_virtualization();
-#endif
+	if (IS_ENABLED(CFG_VIRTUALIZATION)) {
+		IMSG("Initializing virtualization support");
+		core_mmu_init_virtualization();
+	} else {
+		init_tee_runtime();
+	}
 	call_finalcalls();
 	IMSG("Primary CPU switching to normal world boot");
 }

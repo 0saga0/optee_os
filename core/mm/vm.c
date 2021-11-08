@@ -293,7 +293,7 @@ TEE_Result vm_map_pad(struct user_mode_ctx *uctx, vaddr_t *va, size_t len,
 
 	res = umap_add_region(&uctx->vm_info, reg, pad_begin, pad_end, align);
 	if (res)
-		goto err_free_reg;
+		goto err_put_mobj;
 
 	res = alloc_pgt(uctx);
 	if (res)
@@ -326,8 +326,9 @@ TEE_Result vm_map_pad(struct user_mode_ctx *uctx, vaddr_t *va, size_t len,
 
 err_rem_reg:
 	TAILQ_REMOVE(&uctx->vm_info.regions, reg, link);
-err_free_reg:
+err_put_mobj:
 	mobj_put(reg->mobj);
+err_free_reg:
 	free(reg);
 	return res;
 }
@@ -1180,7 +1181,7 @@ TEE_Result vm_va2pa(const struct user_mode_ctx *uctx, void *ua, paddr_t *pa)
 	return tee_mmu_user_va2pa_attr(uctx, ua, pa, NULL);
 }
 
-void *vm_pa2va(const struct user_mode_ctx *uctx, paddr_t pa)
+void *vm_pa2va(const struct user_mode_ctx *uctx, paddr_t pa, size_t pa_size)
 {
 	paddr_t p = 0;
 	struct vm_region *region = NULL;
@@ -1213,7 +1214,7 @@ void *vm_pa2va(const struct user_mode_ctx *uctx, paddr_t pa)
 			if (mobj_get_pa(region->mobj, ofs, granule, &p))
 				continue;
 
-			if (core_is_buffer_inside(pa, 1, p, size)) {
+			if (core_is_buffer_inside(pa, pa_size, p, size)) {
 				/* Remove region offset (mobj phys offset) */
 				ofs -= region->offset;
 				/* Get offset-in-granule */

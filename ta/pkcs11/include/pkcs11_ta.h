@@ -679,6 +679,40 @@ enum pkcs11_ta_cmd {
 	 * C_GenerateKeyPair().
 	 */
 	PKCS11_CMD_GENERATE_KEY_PAIR = 50,
+
+	/*
+	 * PKCS11_CMD_WRAP_KEY - Wraps a private or secret key.
+	 *
+	 * [in]  memref[0] = [
+	 *              32bit session handle,
+	 *              32bit wrapping key handle,
+	 *              32bit key handle,
+	 *              (struct pkcs11_attribute_head)mechanism + mecha params
+	 *	 ]
+	 * [out] memref[0] = 32bit return code, enum pkcs11_rc
+	 * [out] memref[2] = wrapped key
+	 *
+	 * This command relates to the PKCS#11 API function C_WrapKey().
+	 */
+	PKCS11_CMD_WRAP_KEY = 51,
+
+	/*
+	 * PKCS11_CMD_UNWRAP_KEY - Unwraps a wrapped key, creating a new
+	 *                         private or secret key object.
+	 *
+	 * [in]  memref[0] = [
+	 *              32bit session handle,
+	 *              32bit unwrapping key handle,
+	 *              (struct pkcs11_attribute_head)mechanism + mecha params,
+	 *              (struct pkcs11_object_head)attribs + attributes data
+	 *	 ]
+	 * [out] memref[0] = 32bit return code, enum pkcs11_rc
+	 * [in]  memref[1] = wrapped key
+	 * [out] memref[2] = 32bit object handle
+	 *
+	 * This command relates to the PKCS#11 API function C_UnwrapKey().
+	 */
+	PKCS11_CMD_UNWRAP_KEY = 52,
 };
 
 /*
@@ -736,12 +770,22 @@ enum pkcs11_rc {
 	PKCS11_CKR_TOKEN_NOT_PRESENT		= 0x00e0,
 	PKCS11_CKR_TOKEN_NOT_RECOGNIZED		= 0x00e1,
 	PKCS11_CKR_TOKEN_WRITE_PROTECTED	= 0x00e2,
+	PKCS11_CKR_UNWRAPPING_KEY_HANDLE_INVALID = 0x00f0,
+	PKCS11_CKR_UNWRAPPING_KEY_SIZE_RANGE	= 0x00f1,
+	PKCS11_CKR_UNWRAPPING_KEY_TYPE_INCONSISTENT = 0x00f2,
 	PKCS11_CKR_USER_ALREADY_LOGGED_IN	= 0x0100,
 	PKCS11_CKR_USER_NOT_LOGGED_IN		= 0x0101,
 	PKCS11_CKR_USER_PIN_NOT_INITIALIZED	= 0x0102,
 	PKCS11_CKR_USER_TYPE_INVALID		= 0x0103,
 	PKCS11_CKR_USER_ANOTHER_ALREADY_LOGGED_IN = 0x0104,
 	PKCS11_CKR_USER_TOO_MANY_TYPES		= 0x0105,
+	PKCS11_CKR_WRAPPED_KEY_INVALID		= 0x0110,
+	PKCS11_CKR_WRAPPED_KEY_LEN_RANGE	= 0x0112,
+	PKCS11_CKR_WRAPPING_KEY_HANDLE_INVALID  = 0x0113,
+	PKCS11_CKR_WRAPPING_KEY_SIZE_RANGE	= 0x0114,
+	PKCS11_CKR_WRAPPING_KEY_TYPE_INCONSISTENT = 0x0115,
+	PKCS11_CKR_RANDOM_SEED_NOT_SUPPORTED	= 0x0120,
+	PKCS11_CKR_RANDOM_NO_RNG		= 0x0121,
 	PKCS11_CKR_DOMAIN_PARAMS_INVALID	= 0x0130,
 	PKCS11_CKR_CURVE_NOT_SUPPORTED		= 0x0140,
 	PKCS11_CKR_BUFFER_TOO_SMALL		= 0x0150,
@@ -1138,23 +1182,65 @@ enum pkcs11_key_type {
 };
 
 /*
+ * Valid values for attribute PKCS11_CKA_CERTIFICATE_TYPE
+ */
+enum pkcs11_certificate_type {
+	PKCS11_CKC_X_509		= 0x00000000UL,
+	PKCS11_CKC_X_509_ATTR_CERT	= 0x00000001UL,
+	PKCS11_CKC_WTLS			= 0x00000002UL,
+	/* Vendor extension: reserved for undefined ID (~0U) */
+	PKCS11_CKC_UNDEFINED_ID		= PKCS11_UNDEFINED_ID,
+};
+
+/*
+ * Valid values for attribute PKCS11_CKA_CERTIFICATE_CATEGORY
+ */
+enum pkcs11_certificate_category {
+	PKCS11_CK_CERTIFICATE_CATEGORY_UNSPECIFIED	= 0UL,
+	PKCS11_CK_CERTIFICATE_CATEGORY_TOKEN_USER	= 1UL,
+	PKCS11_CK_CERTIFICATE_CATEGORY_AUTHORITY	= 2UL,
+	PKCS11_CK_CERTIFICATE_CATEGORY_OTHER_ENTITY	= 3UL,
+};
+
+/*
  * Valid values for mechanism IDs
  * PKCS11_CKM_<x> reflects CryptoKi client API mechanism IDs CKM_<x>.
  * Note that this will be extended as needed.
  */
 enum pkcs11_mechanism_id {
+	PKCS11_CKM_RSA_PKCS_KEY_PAIR_GEN	= 0x00000,
+	PKCS11_CKM_RSA_PKCS			= 0x00001,
+	PKCS11_CKM_MD5_RSA_PKCS			= 0x00005,
+	PKCS11_CKM_SHA1_RSA_PKCS		= 0x00006,
+	PKCS11_CKM_RSA_PKCS_OAEP		= 0x00009,
+	PKCS11_CKM_RSA_PKCS_PSS			= 0x0000d,
+	PKCS11_CKM_SHA1_RSA_PKCS_PSS		= 0x0000e,
+	PKCS11_CKM_SHA256_RSA_PKCS		= 0x00040,
+	PKCS11_CKM_SHA384_RSA_PKCS		= 0x00041,
+	PKCS11_CKM_SHA512_RSA_PKCS		= 0x00042,
+	PKCS11_CKM_SHA256_RSA_PKCS_PSS		= 0x00043,
+	PKCS11_CKM_SHA384_RSA_PKCS_PSS		= 0x00044,
+	PKCS11_CKM_SHA512_RSA_PKCS_PSS		= 0x00045,
+	PKCS11_CKM_SHA224_RSA_PKCS		= 0x00046,
+	PKCS11_CKM_SHA224_RSA_PKCS_PSS		= 0x00047,
 	PKCS11_CKM_MD5				= 0x00210,
 	PKCS11_CKM_MD5_HMAC			= 0x00211,
+	PKCS11_CKM_MD5_HMAC_GENERAL		= 0x00212,
 	PKCS11_CKM_SHA_1			= 0x00220,
 	PKCS11_CKM_SHA_1_HMAC			= 0x00221,
+	PKCS11_CKM_SHA_1_HMAC_GENERAL		= 0x00222,
 	PKCS11_CKM_SHA256			= 0x00250,
 	PKCS11_CKM_SHA256_HMAC			= 0x00251,
+	PKCS11_CKM_SHA256_HMAC_GENERAL		= 0x00252,
 	PKCS11_CKM_SHA224			= 0x00255,
 	PKCS11_CKM_SHA224_HMAC			= 0x00256,
+	PKCS11_CKM_SHA224_HMAC_GENERAL		= 0x00257,
 	PKCS11_CKM_SHA384			= 0x00260,
 	PKCS11_CKM_SHA384_HMAC			= 0x00261,
+	PKCS11_CKM_SHA384_HMAC_GENERAL		= 0x00262,
 	PKCS11_CKM_SHA512			= 0x00270,
 	PKCS11_CKM_SHA512_HMAC			= 0x00271,
+	PKCS11_CKM_SHA512_HMAC_GENERAL		= 0x00272,
 	PKCS11_CKM_GENERIC_SECRET_KEY_GEN	= 0x00350,
 	PKCS11_CKM_EC_KEY_PAIR_GEN		= 0x01040,
 	PKCS11_CKM_ECDSA			= 0x01041,
@@ -1169,6 +1255,8 @@ enum pkcs11_mechanism_id {
 	PKCS11_CKM_AES_CBC_PAD			= 0x01085,
 	PKCS11_CKM_AES_CTR			= 0x01086,
 	PKCS11_CKM_AES_CTS			= 0x01089,
+	PKCS11_CKM_AES_CMAC			= 0x0108a,
+	PKCS11_CKM_AES_CMAC_GENERAL		= 0x0108b,
 	PKCS11_CKM_AES_ECB_ENCRYPT_DATA		= 0x01104,
 	PKCS11_CKM_AES_CBC_ENCRYPT_DATA		= 0x01105,
 	/*
@@ -1178,4 +1266,34 @@ enum pkcs11_mechanism_id {
 	PKCS11_PROCESSING_IMPORT		= 0x80000000,
 	PKCS11_CKM_UNDEFINED_ID			= PKCS11_UNDEFINED_ID,
 };
+
+/*
+ * PKCS11_CKD_<x> reflects CryptoKi client API key diff function IDs CKD_<x>.
+ */
+enum pkcs11_keydiff_id {
+	PKCS11_CKD_NULL				= 0x0001,
+	/* Vendor extension: reserved for undefined ID (~0U) */
+	PKCS11_CKD_UNDEFINED_ID			= PKCS11_UNDEFINED_ID,
+};
+
+/*
+ * Valid values MG function identifiers
+ * PKCS11_CKG_<x> reflects CryptoKi client API MG function IDs CKG_<x>.
+ */
+enum pkcs11_mgf_id {
+	PKCS11_CKG_MGF1_SHA1			= 0x0001,
+	PKCS11_CKG_MGF1_SHA224			= 0x0005,
+	PKCS11_CKG_MGF1_SHA256			= 0x0002,
+	PKCS11_CKG_MGF1_SHA384			= 0x0003,
+	PKCS11_CKG_MGF1_SHA512			= 0x0004,
+	/* Vendor extension: reserved for undefined ID (~0U) */
+	PKCS11_CKG_UNDEFINED_ID			= PKCS11_UNDEFINED_ID,
+};
+
+/*
+ * Valid values for RSA PKCS/OAEP source type identifier
+ * PKCS11_CKZ_<x> reflects CryptoKi client API source type IDs CKZ_<x>.
+ */
+#define PKCS11_CKZ_DATA_SPECIFIED		0x0001
+
 #endif /*PKCS11_TA_H*/

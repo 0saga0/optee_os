@@ -153,7 +153,7 @@ static uint32_t otp_bank_offset(uint32_t otp_id)
 
 static vaddr_t bsec_base(void)
 {
-	return io_pa_or_va_secure(&bsec_dev.base);
+	return io_pa_or_va_secure(&bsec_dev.base, BSEC_IP_MAGIC_ID_OFF + 1);
 }
 
 static uint32_t bsec_status(void)
@@ -546,7 +546,7 @@ bool stm32_bsec_nsec_can_access_otp(uint32_t otp_id)
 	       nsec_access_granted(otp_id - otp_upper_base());
 }
 
-#ifdef CFG_DT
+#ifdef CFG_EMBED_DTB
 static void enable_nsec_access(unsigned int otp_id)
 {
 	unsigned int idx = (otp_id - otp_upper_base()) / BITS_PER_WORD;
@@ -647,7 +647,7 @@ static void initialize_bsec_from_dt(void)
 static void initialize_bsec_from_dt(void)
 {
 }
-#endif /*CFG_DT*/
+#endif /*CFG_EMBED_DTB*/
 
 static TEE_Result initialize_bsec(void)
 {

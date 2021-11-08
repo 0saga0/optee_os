@@ -238,7 +238,14 @@ static uint64_t mobj_reg_shm_get_cookie(struct mobj *mobj)
 	return to_mobj_reg_shm(mobj)->cookie;
 }
 
-static const struct mobj_ops mobj_reg_shm_ops __rodata_unpaged = {
+/*
+ * When CFG_PREALLOC_RPC_CACHE is disabled, this variable is weak just
+ * to ease breaking its dependency chain when added to the unpaged area.
+ * When CFG_PREALLOC_RPC_CACHE is enabled, releasing RPC preallocated
+ * shm mandates these resources to be unpaged.
+ */
+const struct mobj_ops mobj_reg_shm_ops
+__weak __rodata_unpaged("mobj_reg_shm_ops") = {
 	.get_pa = mobj_reg_shm_get_pa,
 	.get_phys_offs = mobj_reg_shm_get_phys_offs,
 	.get_va = mobj_reg_shm_get_va,
@@ -249,6 +256,13 @@ static const struct mobj_ops mobj_reg_shm_ops __rodata_unpaged = {
 	.inc_map = mobj_reg_shm_inc_map,
 	.dec_map = mobj_reg_shm_dec_map,
 };
+
+#ifdef CFG_PREALLOC_RPC_CACHE
+/* Releasing RPC preallocated shm mandates few resources to be unpaged */
+DECLARE_KEEP_PAGER(mobj_reg_shm_get_cookie);
+DECLARE_KEEP_PAGER(mobj_reg_shm_matches);
+DECLARE_KEEP_PAGER(mobj_reg_shm_free);
+#endif
 
 static bool mobj_reg_shm_matches(struct mobj *mobj __maybe_unused,
 				   enum buf_is_attr attr)
@@ -436,4 +450,4 @@ static TEE_Result mobj_mapped_shm_init(void)
 	return TEE_SUCCESS;
 }
 
-service_init(mobj_mapped_shm_init);
+preinit(mobj_mapped_shm_init);

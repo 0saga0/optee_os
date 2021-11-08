@@ -58,14 +58,18 @@ register_phys_mem_pgdir(MEM_AREA_IO_SEC,
 			ROUNDDOWN(GIC_BASE + GICD_OFFSET, CORE_MMU_PGDIR_SIZE),
 			CORE_MMU_PGDIR_SIZE);
 
+#ifdef DRAM0_BASE
+register_ddr(DRAM0_BASE, DRAM0_SIZE);
+#endif
+
 void main_init_gic(void)
 {
 	vaddr_t gicc_base, gicd_base;
 
 	gicc_base = (vaddr_t)phys_to_virt(GIC_BASE + GICC_OFFSET,
-					  MEM_AREA_IO_SEC);
+					  MEM_AREA_IO_SEC, 1);
 	gicd_base = (vaddr_t)phys_to_virt(GIC_BASE + GICD_OFFSET,
-					  MEM_AREA_IO_SEC);
+					  MEM_AREA_IO_SEC, 1);
 	/* On ARMv8, GIC configuration is initialized in ARM-TF */
 	gic_init_base_addr(&gic_data, gicc_base, gicd_base);
 }

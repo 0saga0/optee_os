@@ -224,7 +224,7 @@ static void pager_unlock(uint32_t exceptions)
 	cpu_spin_unlock_xrestore(&pager_spinlock, exceptions);
 }
 
-void *tee_pager_phys_to_virt(paddr_t pa)
+void *tee_pager_phys_to_virt(paddr_t pa, size_t len)
 {
 	struct core_mmu_table_info ti;
 	unsigned idx;
@@ -232,6 +232,9 @@ void *tee_pager_phys_to_virt(paddr_t pa)
 	paddr_t p;
 	vaddr_t v;
 	size_t n;
+
+	if (pa & SMALL_PAGE_MASK || len > SMALL_PAGE_SIZE)
+		return NULL;
 
 	/*
 	 * Most addresses are mapped lineary, try that first if possible.
@@ -1035,8 +1038,6 @@ static void rem_region(struct vm_paged_region_head *regions,
 	}
 
 	pager_unlock(exceptions);
-
-	free_region(reg);
 }
 DECLARE_KEEP_PAGER(rem_region);
 
@@ -1048,8 +1049,10 @@ void tee_pager_rem_um_region(struct user_mode_ctx *uctx, vaddr_t base,
 	size_t s = ROUNDUP(size, SMALL_PAGE_SIZE);
 
 	TAILQ_FOREACH_SAFE(reg, uctx->regions, link, r_next) {
-		if (core_is_buffer_inside(reg->base, reg->size, base, s))
+		if (core_is_buffer_inside(reg->base, reg->size, base, s)) {
 			rem_region(uctx->regions, reg);
+			free_region(reg);
+		}
 	}
 	tlbi_asid(uctx->vm_info.asid);
 }

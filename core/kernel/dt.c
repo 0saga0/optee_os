@@ -258,7 +258,7 @@ int _fdt_get_status(const void *fdt, int offs)
 	return st;
 }
 
-void _fdt_fill_device_info(void *fdt, struct dt_node_info *info, int offs)
+void _fdt_fill_device_info(const void *fdt, struct dt_node_info *info, int offs)
 {
 	struct dt_node_info dinfo = {
 		.reg = DT_INFO_INVALID_REG,
@@ -282,7 +282,8 @@ void _fdt_fill_device_info(void *fdt, struct dt_node_info *info, int offs)
 		dinfo.reset = (int)fdt32_to_cpu(*cuint);
 	}
 
-	dinfo.interrupt = dt_get_irq(fdt, offs);
+	dinfo.interrupt = dt_get_irq_type_prio(fdt, offs, &dinfo.type,
+					       &dinfo.prio);
 
 	dinfo.status = _fdt_get_status(fdt, offs);
 

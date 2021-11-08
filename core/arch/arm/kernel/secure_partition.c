@@ -29,7 +29,7 @@
 
 #include "thread_private.h"
 
-static const struct ts_ops *_sp_ops;
+const struct ts_ops sp_ops;
 
 /* List that holds all of the loaded SP's */
 static struct sp_sessions_head open_sp_sessions =
@@ -48,12 +48,29 @@ static const struct embedded_ts *find_secure_partition(const TEE_UUID *uuid)
 
 bool is_sp_ctx(struct ts_ctx *ctx)
 {
-	return ctx && (ctx->ops == _sp_ops);
+	return ctx && (ctx->ops == &sp_ops);
 }
 
 static void set_sp_ctx_ops(struct ts_ctx *ctx)
 {
-	ctx->ops = _sp_ops;
+	ctx->ops = &sp_ops;
+}
+
+TEE_Result sp_find_session_id(const TEE_UUID *uuid, uint32_t *session_id)
+{
+	struct sp_session *s = NULL;
+
+	TAILQ_FOREACH(s, &open_sp_sessions, link) {
+		if (!memcmp(&s->ts_sess.ctx->uuid, uuid, sizeof(*uuid))) {
+			if (s->state == sp_dead)
+				return TEE_ERROR_TARGET_DEAD;
+
+			*session_id  = s->endpoint_id;
+			return TEE_SUCCESS;
+		}
+	}
+
+	return TEE_ERROR_ITEM_NOT_FOUND;
 }
 
 struct sp_session *sp_get_session(uint32_t session_id)
@@ -66,6 +83,30 @@ struct sp_session *sp_get_session(uint32_t session_id)
 	}
 
 	return NULL;
+}
+
+TEE_Result sp_partition_info_get_all(struct ffa_partition_info *fpi,
+				     size_t *elem_count)
+{
+	size_t in_count = *elem_count;
+	struct sp_session *s = NULL;
+	size_t count = 0;
+
+	TAILQ_FOREACH(s, &open_sp_sessions, link) {
+		if (s->state == sp_dead)
+			continue;
+		if (count < in_count) {
+			spmc_fill_partition_entry(fpi, s->endpoint_id, 1);
+			fpi++;
+		}
+		count++;
+	}
+
+	*elem_count = count;
+	if (count > in_count)
+		return TEE_ERROR_SHORT_BUFFER;
+
+	return TEE_SUCCESS;
 }
 
 static void sp_init_info(struct sp_ctx *ctx, struct thread_smc_args *args)
@@ -349,7 +390,11 @@ static bool sp_handle_svc(struct thread_svc_regs *regs)
 	return false;
 }
 
-static const struct ts_ops sp_ops __rodata_unpaged = {
+/*
+ * Note: this variable is weak just to ease breaking its dependency chain
+ * when added to the unpaged area.
+ */
+const struct ts_ops sp_ops __weak __rodata_unpaged("sp_ops") = {
 	.enter_invoke_cmd = sp_enter_invoke_cmd,
 	.handle_svc = sp_handle_svc,
 };
@@ -359,8 +404,6 @@ static TEE_Result sp_init_all(void)
 	TEE_Result res = TEE_SUCCESS;
 	const struct embedded_ts *sp = NULL;
 	char __maybe_unused msg[60] = { '\0', };
-
-	_sp_ops = &sp_ops;
 
 	for_each_secure_partition(sp) {
 		if (sp->uncompressed_size)

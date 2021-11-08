@@ -36,8 +36,11 @@ srcs-$(CFG_LS_I2C) += ls_i2c.c
 srcs-$(CFG_LS_GPIO) += ls_gpio.c
 srcs-$(CFG_LS_DSPI) += ls_dspi.c
 srcs-$(CFG_IMX_RNGB) += imx_rngb.c
+srcs-$(CFG_IMX_OCOTP) += imx_ocotp.c
+srcs-$(CFG_IMX_SC) += imx_mu.c
 
 subdirs-y += crypto
 subdirs-$(CFG_BNXT_FW) += bnxt
+subdirs-$(CFG_DRIVERS_CLK) += clk
 subdirs-$(CFG_SCMI_MSG_DRIVERS) += scmi-msg
 subdirs-y += imx

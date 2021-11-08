@@ -60,11 +60,15 @@ CFG_TEE_CORE_NB_CORE ?= 2
 CFG_WITH_PAGER ?= y
 CFG_WITH_LPAE ?= y
 CFG_MMAP_REGIONS ?= 23
+CFG_DTB_MAX_SIZE ?= (256 * 1024)
 
 ifeq ($(CFG_EMBED_DTB_SOURCE_FILE),)
 # Some drivers mandate DT support
+$(call force,CFG_STM32_GPIO,n)
 $(call force,CFG_STM32_I2C,n)
 $(call force,CFG_STPMIC1,n)
+$(call force,CFG_STM32MP1_SCMI_SIP,n)
+$(call force,CFG_SCMI_PTA,n)
 endif
 
 CFG_STM32_BSEC ?= y

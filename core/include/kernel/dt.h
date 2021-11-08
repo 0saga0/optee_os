@@ -7,6 +7,7 @@
 #define KERNEL_DT_H
 
 #include <compiler.h>
+#include <kernel/interrupt.h>
 #include <kernel/panic.h>
 #include <stdint.h>
 #include <types_ext.h>
@@ -33,6 +34,10 @@
  * @reset: Device reset identifier (positive value) or DT_INFO_INVALID_CLOCK
  * @interrupt: Device interrupt identifier (positive value) or
  * DT_INFO_INVALID_INTERRUPT
+ * @type: IRQ_TYPE_* value parsed from interrupts properties or IRQ_TYPE_NONE if
+ * not present
+ * @prio: interrupt priority parsed from interrupts properties or 0 if not
+ * present
  */
 struct dt_node_info {
 	unsigned int status;
@@ -40,6 +45,8 @@ struct dt_node_info {
 	int clock;
 	int reset;
 	int interrupt;
+	uint32_t type;
+	uint32_t prio;
 };
 
 #if defined(CFG_DT)
@@ -50,10 +57,18 @@ struct dt_node_info {
 
 struct dt_device_match {
 	const char *compatible;
+	const void *compat_data;
+};
+
+enum dt_driver_type {
+	DT_DRIVER_NOTYPE,
+	DT_DRIVER_UART,
+	DT_DRIVER_CLK,
 };
 
 struct dt_driver {
 	const char *name;
+	enum dt_driver_type type;
 	const struct dt_device_match *match_table; /* null-terminated */
 	const void *driver;
 };
@@ -150,7 +165,8 @@ int _fdt_get_status(const void *fdt, int offs);
  * a single reset ID line and a single interrupt ID.
  * Default DT_INFO_* macros are used when the relate property is not found.
  */
-void _fdt_fill_device_info(void *fdt, struct dt_node_info *info, int node);
+void _fdt_fill_device_info(const void *fdt, struct dt_node_info *info,
+			   int node);
 
 #else /* !CFG_DT */
 
@@ -195,7 +211,7 @@ static inline int _fdt_get_status(const void *fdt __unused, int offs __unused)
 }
 
 __noreturn
-static inline void _fdt_fill_device_info(void *fdt __unused,
+static inline void _fdt_fill_device_info(const void *fdt __unused,
 					 struct dt_node_info *info __unused,
 					 int node __unused)
 {

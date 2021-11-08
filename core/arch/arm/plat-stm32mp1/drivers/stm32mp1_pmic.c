@@ -520,7 +520,7 @@ static bool initialize_pmic_i2c(void)
 
 	/* Initialize PMIC I2C */
 	i2c->base.pa = i2c_info.reg;
-	i2c->base.va = (vaddr_t)phys_to_virt(i2c->base.pa, MEM_AREA_IO_SEC);
+	i2c->base.va = (vaddr_t)phys_to_virt(i2c->base.pa, MEM_AREA_IO_SEC, 1);
 	assert(i2c->base.va);
 	i2c->dt_status = i2c_info.status;
 	i2c->clock = i2c_info.clock;
@@ -593,13 +593,6 @@ static void register_non_secure_pmic(void)
 						 i2c_handle.pinctrl[n].pin);
 
 	stm32mp_register_non_secure_periph_iomem(i2c_handle.base.pa);
-
-	/*
-	 * Non secure PMIC can be used by secure world during power state
-	 * transition when non-secure world is suspended. Therefore secure
-	 * the I2C clock parents, if not specifically the I2C clock itself.
-	 */
-	stm32mp_register_clock_parents_secure(i2c_handle.clock);
 }
 
 static void register_secure_pmic(void)

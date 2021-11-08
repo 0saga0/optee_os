@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright (c) 2017-2019, STMicroelectronics
+ * Copyright (c) 2017-2021, STMicroelectronics
  */
 
+#include <config.h>
 #include <drivers/stm32_etzpc.h>
 #include <drivers/stm32_gpio.h>
 #include <drivers/stm32mp1_etzpc.h>
@@ -156,13 +157,13 @@ static const char *shres2str_state_tbl[4] __maybe_unused = {
 	[SHRES_SECURE] = "secure",
 };
 
-static __maybe_unused const char *shres2str_state(enum stm32mp_shres id)
+static __maybe_unused const char *shres2str_state(enum shres_state id)
 {
 	return shres2str_state_tbl[id];
 }
 
 /* GPIOZ bank pin count depends on SoC variants */
-#ifdef CFG_DT
+#ifdef CFG_EMBED_DTB
 /* A light count routine for unpaged context to not depend on DTB support */
 static int gpioz_nbpin = -1;
 
@@ -710,8 +711,10 @@ static TEE_Result stm32mp1_init_final_shres(void)
 	}
 
 	set_etzpc_secure_configuration();
-	set_gpio_secure_configuration();
-	register_pm_driver_cb(gpioz_pm, NULL);
+	if (IS_ENABLED(CFG_STM32_GPIO)) {
+		set_gpio_secure_configuration();
+		register_pm_driver_cb(gpioz_pm, NULL);
+	}
 	check_rcc_secure_configuration();
 
 	return TEE_SUCCESS;

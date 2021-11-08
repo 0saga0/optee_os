@@ -215,12 +215,17 @@ static inline enum pkcs11_rc get_u32_attribute(struct obj_attrs *head,
 /*
  * Return true if all attributes from the reference are found and match value
  * in the candidate attribute list.
- *
- * Return PKCS11_CKR_OK on success, or a PKCS11 return code.
  */
 bool attributes_match_reference(struct obj_attrs *ref,
 				struct obj_attrs *candidate);
 
+/*
+ * Check attributes from @ref are all found or added in @head
+ *
+ * Return PKCS11_CKR_OK on success, or a PKCS11 return code.
+ */
+enum pkcs11_rc attributes_match_add_reference(struct obj_attrs **head,
+					      struct obj_attrs *ref);
 /*
  * get_class() - Get class ID of an object
  * @head:	Pointer to serialized attributes
@@ -253,6 +258,24 @@ static inline enum pkcs11_key_type get_key_type(struct obj_attrs *head)
 
 	if (get_attribute(head, PKCS11_CKA_KEY_TYPE, &type, &size))
 		return PKCS11_CKK_UNDEFINED_ID;
+
+	return type;
+}
+
+/*
+ * get_certificate_type() - Get the certificate type of an object
+ * @head:	Pointer to serialized attributes
+ *
+ * Returns the certificate type of an object on success or returns
+ * PKCS11_CKC_UNDEFINED_ID on error.
+ */
+static inline
+enum pkcs11_certificate_type get_certificate_type(struct obj_attrs *head)
+{
+	uint32_t type = 0;
+
+	if (get_u32_attribute(head, PKCS11_CKA_CERTIFICATE_TYPE, &type))
+		return PKCS11_CKC_UNDEFINED_ID;
 
 	return type;
 }

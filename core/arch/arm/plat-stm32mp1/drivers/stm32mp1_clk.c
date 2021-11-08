@@ -62,6 +62,7 @@ enum stm32mp1_parent_id {
 	_PCLK3,
 	_PCLK4,
 	_PCLK5,
+	_HCLK5,
 	_HCLK6,
 	_HCLK2,
 	_CK_PER,
@@ -124,6 +125,7 @@ static const uint8_t parent_id_clock_id[_PARENT_NB] = {
 	[_PCLK3] = CK_AXI,
 	[_PCLK4] = CK_AXI,
 	[_PCLK5] = CK_AXI,
+	[_HCLK5] = CK_AXI,
 	[_HCLK6] = CK_AXI,
 	[_HCLK2] = CK_AXI,
 	[_CK_PER] = CK_PER,
@@ -340,13 +342,13 @@ static const struct stm32mp1_clk_gate stm32mp1_clk_gate[] = {
 	_CLK_SC2_FIXED(SEC, RCC_MP_APB5ENSETR, BSECEN, BSEC, _PCLK5),
 	_CLK_SC2_SELEC(SEC, RCC_MP_APB5ENSETR, STGENEN, STGEN_K, _STGEN_SEL),
 
-	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, GPIOZEN, GPIOZ, _PCLK5),
-	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, CRYP1EN, CRYP1, _PCLK5),
-	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, HASH1EN, HASH1, _PCLK5),
+	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, GPIOZEN, GPIOZ, _HCLK5),
+	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, CRYP1EN, CRYP1, _HCLK5),
+	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, HASH1EN, HASH1, _HCLK5),
 	_CLK_SC2_SELEC(SEC, RCC_MP_AHB5ENSETR, RNG1EN, RNG1_K, _RNG1_SEL),
 	_CLK_SC2_FIXED(SEC, RCC_MP_AHB5ENSETR, BKPSRAMEN, BKPSRAM, _PCLK5),
 
-	_CLK_SC2_FIXED(SEC, RCC_MP_TZAHB6ENSETR, MDMA, MDMA, _PCLK5),
+	_CLK_SC2_FIXED(SEC, RCC_MP_TZAHB6ENSETR, MDMA, MDMA, _HCLK6),
 
 	_CLK_SELEC(SEC, RCC_BDCR, RCC_BDCR_RTCCKEN_POS, RTC, _RTC_SEL),
 
@@ -521,7 +523,8 @@ static const char __maybe_unused *const stm32mp1_clk_parent_name[_PARENT_NB] = {
 	[_PCLK3] = "PCLK3",
 	[_PCLK4] = "PCLK4",
 	[_PCLK5] = "PCLK5",
-	[_HCLK6] = "KCLK6",
+	[_HCLK5] = "HCLK5",
+	[_HCLK6] = "HCLK6",
 	[_HCLK2] = "HCLK2",
 	[_CK_PER] = "CK_PER",
 	[_CK_MPU] = "CK_MPU",
@@ -736,6 +739,7 @@ static unsigned long get_clock_rate(int p)
 	/* AXI sub system */
 	case _ACLK:
 	case _HCLK2:
+	case _HCLK5:
 	case _HCLK6:
 	case _PCLK4:
 	case _PCLK5:
@@ -1169,6 +1173,7 @@ static void secure_parent_clocks(unsigned long parent_id)
 	switch (parent_id) {
 	case _ACLK:
 	case _HCLK2:
+	case _HCLK5:
 	case _HCLK6:
 	case _PCLK4:
 	case _PCLK5:
@@ -1231,7 +1236,7 @@ static const char *stm32mp_osc_node_label[NB_OSC] = {
 	[_USB_PHY_48] = "ck_usbo_48m"
 };
 
-static unsigned int clk_freq_prop(void *fdt, int node)
+static unsigned int clk_freq_prop(const void *fdt, int node)
 {
 	const fdt32_t *cuint = NULL;
 	int ret = 0;
@@ -1247,7 +1252,7 @@ static unsigned int clk_freq_prop(void *fdt, int node)
 	return fdt32_to_cpu(*cuint);
 }
 
-static void get_osc_freq_from_dt(void *fdt)
+static void get_osc_freq_from_dt(const void *fdt)
 {
 	enum stm32mp_osc_id idx = _UNKNOWN_OSC_ID;
 	int clk_node = fdt_path_offset(fdt, "/clocks");
@@ -1299,28 +1304,22 @@ static void enable_static_secure_clocks(void)
 		stm32_clock_enable(RTCAPB);
 }
 
-static TEE_Result stm32mp1_clk_early_init(void)
+static void enable_rcc_tzen(void)
 {
-	void *fdt = NULL;
-	int node = 0;
+	io_setbits32(stm32_rcc_base() + RCC_TZCR, RCC_TZCR_TZEN);
+}
+
+static void disable_rcc_tzen(void)
+{
+	IMSG("RCC is non-secure");
+	io_clrbits32(stm32_rcc_base() + RCC_TZCR, RCC_TZCR_TZEN);
+}
+
+static TEE_Result stm32mp1_clk_init(const void *fdt, int node)
+{
 	unsigned int i = 0;
 	int len = 0;
 	int ignored = 0;
-
-	fdt = get_embedded_dt();
-	node = fdt_node_offset_by_compatible(fdt, -1, DT_RCC_CLK_COMPAT);
-
-	if (node < 0 || _fdt_reg_base_address(fdt, node) != RCC_BASE)
-		panic();
-
-	if (_fdt_get_status(fdt, node) & DT_STATUS_OK_SEC) {
-		io_setbits32(stm32_rcc_base() + RCC_TZCR, RCC_TZCR_TZEN);
-	} else {
-		if (io_read32(stm32_rcc_base() + RCC_TZCR) & RCC_TZCR_TZEN)
-			panic("Refuse to release RCC[TZEN]");
-
-		IMSG("RCC is non-secure");
-	}
 
 	get_osc_freq_from_dt(fdt);
 
@@ -1360,6 +1359,42 @@ static TEE_Result stm32mp1_clk_early_init(void)
 
 	if (ignored != 0)
 		IMSG("DT clock tree configurations were ignored");
+
+	return TEE_SUCCESS;
+}
+
+static TEE_Result stm32mp1_clk_early_init(void)
+{
+	TEE_Result res = TEE_ERROR_GENERIC;
+	const void *fdt = get_embedded_dt();
+	bool rcc_secure = true;
+	int node = 0;
+
+	node = fdt_node_offset_by_compatible(fdt, -1, DT_RCC_SECURE_CLK_COMPAT);
+	if (node < 0) {
+		node = fdt_node_offset_by_compatible(fdt, -1,
+						     DT_RCC_CLK_COMPAT);
+		if (node < 0)
+			panic();
+
+		rcc_secure = false;
+	}
+
+	assert(_fdt_reg_base_address(fdt, node) == RCC_BASE);
+	assert(_fdt_get_status(fdt, node) != DT_STATUS_DISABLED);
+
+	if (!rcc_secure) {
+		if (io_read32(stm32_rcc_base() + RCC_TZCR) & RCC_TZCR_TZEN)
+			panic("Refuse to release RCC[TZEN]");
+
+		disable_rcc_tzen();
+	} else {
+		enable_rcc_tzen();
+	}
+
+	res = stm32mp1_clk_init(fdt, node);
+	if (res)
+		return res;
 
 	enable_static_secure_clocks();
 
